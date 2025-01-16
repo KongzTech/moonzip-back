@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use const_str_to_pubkey::str_to_pubkey;
 pub mod common;
 pub mod curved_pool;
+pub mod pumpfun;
 pub mod static_pool;
 pub mod transmuter;
 pub mod utils;
@@ -73,6 +74,12 @@ pub mod moonzip {
 
     pub fn init_transmuter_for_curve(ctx: Context<InitTransmuterForCurveAccounts>) -> Result<()> {
         transmuter::init_for_curve(ctx)
+    }
+
+    pub fn init_transmuter_for_pumpfun_curve(
+        ctx: Context<InitTransmuterForPumpfunCurveAccounts>,
+    ) -> Result<()> {
+        transmuter::init_for_pumpfun_curve(ctx)
     }
 
     pub fn transmute(ctx: Context<TransmuteAccounts>, data: TransmuteData) -> Result<()> {

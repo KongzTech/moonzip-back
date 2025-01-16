@@ -24,6 +24,7 @@ borsh = "0.10"
 paste = "1"
 num = "0.4"
 derive_more = { version = "1", features = ["from", "into"] }
+pumpfun-cpi = { path = "../../integrations/pumpfun-cpi" }
 
 [dev-dependencies]
 anyhow = "1"

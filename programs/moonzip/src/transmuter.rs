@@ -4,6 +4,7 @@ use crate::{
         CurvedPool, CURVED_POOL_PREFIX,
     },
     ensure_account_size,
+    pumpfun::{self, seeds::BONDING_CURVE_SEED, CurveWrapper},
     utils::Sizable,
     PROGRAM_AUTHORITY,
 };
@@ -12,6 +13,7 @@ use anchor_spl::{
     associated_token::AssociatedToken,
     token::{Mint, Token, TokenAccount},
 };
+use pumpfun_cpi::BondingCurve;
 
 pub const TRANSMUTER_PREFIX: &[u8] = b"transmuter";
 
@@ -27,10 +29,21 @@ pub fn create(ctx: Context<CreateTransmuterAccounts>) -> Result<()> {
 }
 
 pub fn init_for_curve(ctx: Context<InitTransmuterForCurveAccounts>) -> Result<()> {
-    let transmuter = &mut ctx.accounts.transmuter;
+    let transmuter = &mut ctx.accounts.base.transmuter;
     transmuter.status = TransmuterStatus::Initialized {
         method: TransmuteMethod::CurveLimit {
             curve_snapshot: ctx.accounts.curved_pool.curve,
+        },
+    };
+
+    Ok(())
+}
+
+pub fn init_for_pumpfun_curve(ctx: Context<InitTransmuterForPumpfunCurveAccounts>) -> Result<()> {
+    let transmuter = &mut ctx.accounts.base.transmuter;
+    transmuter.status = TransmuterStatus::Initialized {
+        method: TransmuteMethod::PumpfunCurveLimit {
+            curve_snapshot: (*ctx.accounts.bonding_curve).into(),
         },
     };
 
@@ -65,28 +78,32 @@ pub fn transmute(ctx: Context<TransmuteAccounts>, data: TransmuteData) -> Result
         ))?;
     }
 
-    match method {
+    let tokens = match method {
         TransmuteMethod::CurveLimit { curve_snapshot } => {
-            let tokens = SellCalculator::new(curve_snapshot).fixed_sols(data.tokens);
-            anchor_spl::token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    anchor_spl::token::Transfer {
-                        from: ctx.accounts.transmuter_to_token_account.to_account_info(),
-                        to: ctx.accounts.user_to_token_account.to_account_info(),
-                        authority: ctx.accounts.transmuter.to_account_info(),
-                    },
-                    &[&[
-                        TRANSMUTER_PREFIX,
-                        ctx.accounts.transmuter.from_mint.as_ref(),
-                        ctx.accounts.transmuter.to_mint.as_ref(),
-                        &[ctx.accounts.transmuter.bump],
-                    ]],
-                ),
-                tokens,
-            )?;
+            SellCalculator::new(curve_snapshot).fixed_sols(data.tokens)
         }
-    }
+        TransmuteMethod::PumpfunCurveLimit { curve_snapshot } => {
+            pumpfun::SellCalculator::new(curve_snapshot).fixed_sols(data.tokens)
+        }
+    };
+
+    anchor_spl::token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::Transfer {
+                from: ctx.accounts.transmuter_to_token_account.to_account_info(),
+                to: ctx.accounts.user_to_token_account.to_account_info(),
+                authority: ctx.accounts.transmuter.to_account_info(),
+            },
+            &[&[
+                TRANSMUTER_PREFIX,
+                ctx.accounts.transmuter.from_mint.as_ref(),
+                ctx.accounts.transmuter.to_mint.as_ref(),
+                &[ctx.accounts.transmuter.bump],
+            ]],
+        ),
+        tokens,
+    )?;
 
     Ok(())
 }
@@ -121,6 +138,27 @@ pub struct CreateTransmuterAccounts<'info> {
 
 #[derive(Accounts)]
 pub struct InitTransmuterForCurveAccounts<'info> {
+    pub base: BaseInitTransmuterAccounts<'info>,
+
+    #[account(
+        seeds = [CURVED_POOL_PREFIX, base.to_mint.key().as_ref()], bump=curved_pool.bump
+    )]
+    pub curved_pool: Account<'info, CurvedPool>,
+}
+
+#[derive(Accounts)]
+pub struct InitTransmuterForPumpfunCurveAccounts<'info> {
+    pub base: BaseInitTransmuterAccounts<'info>,
+
+    #[account(
+        seeds = [BONDING_CURVE_SEED, base.to_mint.key().as_ref()], bump,
+        seeds::program = pumpfun_cpi::ID
+    )]
+    pub bonding_curve: Account<'info, BondingCurve>,
+}
+
+#[derive(Accounts)]
+pub struct BaseInitTransmuterAccounts<'info> {
     #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
 
@@ -142,11 +180,6 @@ pub struct InitTransmuterForCurveAccounts<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-
-    #[account(
-        seeds = [CURVED_POOL_PREFIX, to_mint.key().as_ref()], bump=curved_pool.bump
-    )]
-    pub curved_pool: Account<'info, CurvedPool>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -244,6 +277,9 @@ pub enum TransmuteMethod {
     ///
     /// It is intended to limit users so that they won't get immediate profit on sell at the curve start
     CurveLimit { curve_snapshot: CurveState },
+
+    /// Same as [ Self::CurveLimit ], but for pumpfun curve.
+    PumpfunCurveLimit { curve_snapshot: CurveWrapper },
 }
 
 impl Sizable for TransmuteMethod {

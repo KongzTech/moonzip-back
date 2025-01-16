@@ -1447,6 +1447,7 @@ dependencies = [
  "derive_more",
  "num",
  "paste",
+ "pumpfun-cpi",
 ]
 
 [[package]]

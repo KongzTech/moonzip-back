@@ -11,7 +11,7 @@ import {
   MINT_SIZE,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
-import { Program } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import { Moonzip } from "../target/types/moonzip";
 
 const fs = require("node:fs");
@@ -104,4 +104,9 @@ export async function tokenBalance(mint: PublicKey, owner: PublicKey) {
     )
   ).value;
   return parseInt(response.amount);
+}
+
+export function takeFee(amount: BN, fee: number) {
+  const feeAmount = amount.mul(new BN(fee)).div(new BN(10000));
+  return amount.sub(feeAmount);
 }
