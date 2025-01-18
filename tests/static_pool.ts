@@ -9,6 +9,7 @@ import {
 import { Moonzip } from "../target/types/moonzip";
 import {
   airdrop,
+  createProject,
   getAuthority,
   keypairFromFile,
   mintToken,
@@ -63,15 +64,21 @@ describe("static pool", () => {
 
     await airdrop(creator.publicKey, new BN(LAMPORTS_PER_SOL));
     await airdrop(authority.publicKey, new BN(LAMPORTS_PER_SOL));
+    let randomId = new BN(Math.floor(Math.random() * 100000).toString());
+    await createProject(creator, randomId, {
+      useStaticPool: true,
+      curvePool: {
+        moonzip: {},
+      },
+    });
 
     let signature = await main_program.methods
-      .createStaticPool({ config: config })
+      .createStaticPool({ config: config, projectId: { 0: randomId } })
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
-        creator: creator.publicKey,
       })
-      .signers([authority, creator, mint])
+      .signers([authority, mint])
       .rpc();
     await connection.confirmTransaction(signature);
     let state = await main_program.account.staticPool.fetch(
@@ -80,7 +87,6 @@ describe("static pool", () => {
 
     expect(state.collectedLamports.toNumber()).to.eql(0);
     expect(state.state).to.eql({ active: {} });
-    expect(state.owner).to.eql(creator.publicKey);
     expect(state.mint).to.eql(mint.publicKey);
     expect(state.config.closeConditions.maxLamports.toNumber()).to.eql(
       config.closeConditions.maxLamports.toNumber()

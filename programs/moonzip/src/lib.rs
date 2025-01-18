@@ -2,21 +2,30 @@ use anchor_lang::prelude::*;
 use const_str_to_pubkey::str_to_pubkey;
 pub mod common;
 pub mod curved_pool;
+pub mod project;
 pub mod pumpfun;
 pub mod static_pool;
 pub mod transmuter;
 pub mod utils;
 
 declare_id!("544hmhQ5N72wv8aJFz92sgRMnDEqwmSuzGtG8T8CPgNb");
-const PROGRAM_AUTHORITY: Pubkey = str_to_pubkey(env!("MOONZIP_AUTHORITY"));
+pub const PROGRAM_AUTHORITY: Pubkey = str_to_pubkey(env!("MOONZIP_AUTHORITY"));
 
 #[program]
 pub mod moonzip {
     pub use super::curved_pool::global::*;
     pub use super::curved_pool::*;
+    pub use super::project::*;
     pub use super::static_pool::*;
     pub use super::transmuter::*;
     use super::*;
+
+    pub fn create_project(
+        ctx: Context<CreateProjectAccounts>,
+        data: CreateProjectData,
+    ) -> Result<()> {
+        project::create(ctx, data)
+    }
 
     pub fn create_static_pool(
         ctx: Context<CreateStaticPoolAccounts>,

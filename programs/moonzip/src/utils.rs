@@ -36,7 +36,7 @@ pub fn deduct_fee(amount: u64, fee_bp: u32) -> (u64, u64) {
 macro_rules! ensure_account_size {
     ($t:ty, $s:expr) => {
         impl $t {
-            const ACCOUNT_SIZE: usize = $s;
+            pub const ACCOUNT_SIZE: usize = $s;
         }
 
         paste::paste! {

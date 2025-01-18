@@ -14,7 +14,7 @@ pub fn create(ctx: Context<CreateStaticPoolAccounts>, data: CreateStaticPoolData
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
             system_program::CreateAccount {
-                from: ctx.accounts.creator.to_account_info(),
+                from: ctx.accounts.authority.to_account_info(),
                 to: ctx.accounts.mint.to_account_info(),
             },
         ),
@@ -35,7 +35,6 @@ pub fn create(ctx: Context<CreateStaticPoolAccounts>, data: CreateStaticPoolData
     )?;
 
     ctx.accounts.pool.set_inner(StaticPool {
-        owner: *ctx.accounts.creator.key,
         mint: *ctx.accounts.mint.key,
         config: data.config,
         collected_lamports: 0,
@@ -133,7 +132,6 @@ impl Sizable for StaticPoolConfig {
 #[account]
 #[derive(Default, PartialEq, PartialOrd)]
 pub struct StaticPool {
-    owner: Pubkey,
     mint: Pubkey,
     config: StaticPoolConfig,
     state: StaticPoolState,
@@ -156,7 +154,6 @@ impl StaticPool {
 impl Sizable for StaticPool {
     fn longest() -> Self {
         Self {
-            owner: Default::default(),
             mint: Default::default(),
             config: Sizable::longest(),
             state: Sizable::longest(),
@@ -184,27 +181,25 @@ impl Sizable for StaticPoolState {
     }
 }
 
-ensure_account_size!(StaticPool, 109);
+ensure_account_size!(StaticPool, 77);
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CreateStaticPoolData {
-    config: StaticPoolConfig,
+    pub config: StaticPoolConfig,
 }
 
 #[derive(Accounts)]
+#[instruction(data: CreateStaticPoolData)]
 pub struct CreateStaticPoolAccounts<'info> {
-    #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
+    #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
-
-    #[account(mut)]
-    pub creator: Signer<'info>,
 
     #[account(mut)]
     pub mint: Signer<'info>,
 
     #[account(
         init,
-        payer = creator,
+        payer = authority,
         space = StaticPool::ACCOUNT_SIZE, seeds = [STATIC_POOL_PREFIX, mint.key().as_ref()], bump
     )]
     pub pool: Account<'info, StaticPool>,

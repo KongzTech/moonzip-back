@@ -110,3 +110,29 @@ export function takeFee(amount: BN, fee: number) {
   const feeAmount = amount.mul(new BN(fee)).div(new BN(10000));
   return amount.sub(feeAmount);
 }
+
+export function getProjectAddress(projectId: BN) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("project"), projectId.toArrayLike(Buffer, "le", 16)],
+    anchor.workspace.Moonzip.programId
+  )[0];
+}
+
+export async function createProject(owner: Keypair, projectId: BN, schema) {
+  const provider = getProvider();
+  const authority = getAuthority();
+  const address = getProjectAddress(projectId);
+  const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
+  const tx = await main_program.methods
+    .createProject({ id: { 0: projectId }, schema: schema })
+    .accounts({
+      authority: authority.publicKey,
+      creator: owner.publicKey,
+      project: address,
+    })
+    .signers([authority, owner])
+    .rpc();
+  await provider.connection.confirmTransaction(tx);
+  console.log(`created project ${address.toBase58()}`);
+  return address;
+}

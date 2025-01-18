@@ -1,0 +1,7 @@
+
+DROP TABLE IF EXISTS project;
+DROP TYPE IF EXISTS token_meta;
+DROP TYPE IF EXISTS project_stage;
+DROP DOMAIN IF EXISTS pubkey;
+DROP TYPE IF EXISTS deploy_schema;
+DROP TYPE IF EXISTS curve_variant;

@@ -1,0 +1,101 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "pubkey",
+            "kind": {
+              "Domain": "Varchar"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "token_meta",
+            "kind": {
+              "Composite": [
+                [
+                  "name",
+                  "Varchar"
+                ],
+                [
+                  "ticker",
+                  "Varchar"
+                ],
+                [
+                  "description",
+                  "Text"
+                ],
+                [
+                  "image",
+                  "Text"
+                ],
+                [
+                  "website",
+                  "Text"
+                ],
+                [
+                  "twitter",
+                  "Text"
+                ],
+                [
+                  "telegram",
+                  "Text"
+                ]
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "deploy_schema",
+            "kind": {
+              "Composite": [
+                [
+                  "use_static_pool",
+                  "Bool"
+                ],
+                [
+                  "curve_pool",
+                  {
+                    "Custom": {
+                      "name": "curve_variant",
+                      "kind": {
+                        "Enum": [
+                          "Moonzip",
+                          "Pumpfun"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "Confirmed",
+                "Prelaunch",
+                "OnCurve",
+                "Graduated"
+              ]
+            }
+          }
+        },
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e51d367fdf985f0a26db1279638cdfcd13f85c686ef0163f8c325ea322feb28d"
+}
