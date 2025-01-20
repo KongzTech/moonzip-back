@@ -21,6 +21,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, instrument};
 
+pub mod ipfs;
 pub mod keys_provider;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,6 +29,7 @@ pub struct MigratorConfig {
     #[serde(with = "humantime_serde")]
     pub tick_interval: Duration,
     pub keys_provider: keys_provider::Config,
+    pub ipfs: ipfs::IpfsClientConfig,
 }
 
 pub struct Migrator {
