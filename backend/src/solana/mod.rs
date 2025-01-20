@@ -1,27 +1,23 @@
-use crate::utils::keypair::SaneKeypair;
-use anchor_client::Client;
 use serde::Deserialize;
-use std::sync::Arc;
+use services_common::utils::keypair::SaneKeypair;
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct SolanaConfig {
-    pub authority_key: SaneKeypair,
+#[derive(Debug, Deserialize, Clone)]
+pub struct SolanaKeysConfig {
+    pub authority: SaneKeypair,
 }
 
-#[derive(Clone)]
-pub struct SolanaPool {
-    config: Arc<SolanaConfig>,
+pub struct SolanaKeys {
+    pub authority: SaneKeypair,
 }
 
-impl SolanaPool {
-    pub fn from_cfg(cfg: SolanaConfig) -> Self {
-        Self { config: cfg.into() }
+impl SolanaKeys {
+    pub fn from_cfg(cfg: SolanaKeysConfig) -> Self {
+        Self {
+            authority: cfg.authority,
+        }
     }
 
-    pub fn for_authority(&self) -> Client<SaneKeypair> {
-        anchor_client::Client::new(
-            anchor_client::Cluster::Debug,
-            self.config.authority_key.clone(),
-        )
+    pub fn authority_keypair(&self) -> &SaneKeypair {
+        &self.authority
     }
 }

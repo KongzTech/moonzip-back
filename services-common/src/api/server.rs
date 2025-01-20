@@ -3,9 +3,6 @@ use std::sync::Arc;
 use super::auth;
 use super::auth::provider::{AuthConfig, AuthProvider};
 use super::response::{ApiError, AppJson};
-use crate::app::{App, CreateProjectRequest, CreateProjectResponse};
-use axum::extract::State;
-use axum::Json;
 use axum::{
     extract::{MatchedPath, Request},
     routing::{get, post},
@@ -22,7 +19,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use utoipauto::utoipauto;
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Config {
+pub struct ApiConfig {
     #[serde(default = "expose_docs_default")]
     pub expose_dev: bool,
 
@@ -68,24 +65,37 @@ pub fn expose_docs_default() -> bool {
     false
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    app: Arc<App>,
+pub struct AppState<T> {
+    app: Arc<T>,
     auth: Arc<AuthProvider>,
-    config: Arc<Config>,
+    config: Arc<ApiConfig>,
 }
 
-impl AppState {
-    pub fn new(app: Arc<App>, config: Config) -> Self {
+impl<T> Clone for AppState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            app: self.app.clone(),
+            auth: self.auth.clone(),
+            config: self.config.clone(),
+        }
+    }
+}
+
+impl<T> AppState<T> {
+    pub fn new(app: Arc<T>, config: ApiConfig) -> Self {
         Self {
             app,
             auth: Arc::new(AuthProvider::from_cfg(config.auth.clone())),
             config: Arc::new(config),
         }
     }
+
+    pub fn app(&self) -> Arc<T> {
+        self.app.clone()
+    }
 }
 
-impl auth::ConfigProvider for AppState {
+impl<T> auth::ConfigProvider for AppState<T> {
     fn decode_key(&self) -> &DecodingKey {
         &self.auth.decoding_key
     }
@@ -99,16 +109,18 @@ impl auth::ConfigProvider for AppState {
     }
 }
 
-pub async fn serve(state: AppState) -> anyhow::Result<()> {
+pub async fn serve<T: Send + Sync + 'static>(
+    state: AppState<T>,
+    api_router: Router<AppState<T>>,
+) -> anyhow::Result<()> {
     #[utoipauto(paths = "./backend/src")]
     #[derive(OpenApi)]
     #[openapi()]
     struct ApiDoc;
 
-    let api = Router::new()
+    let service = Router::new()
         .route("/health", get(health))
-        .route("/auth", post(auth::auth::<AppState>))
-        .route("/project/create", post(create_project));
+        .route("/auth", post(auth::auth::<AppState<T>>));
 
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|req: &Request| {
@@ -135,7 +147,8 @@ pub async fn serve(state: AppState) -> anyhow::Result<()> {
         app
     };
     let app = app
-        .nest("/api", api)
+        .nest("/api", api_router)
+        .nest("/service", service)
         .layer(trace_layer.clone())
         .with_state(state.clone());
 
@@ -171,11 +184,4 @@ struct HealthResponse {
 
 async fn health() -> Result<AppJson<HealthResponse>, ApiError> {
     Ok(AppJson(HealthResponse { status: true }))
-}
-
-async fn create_project(
-    State(state): State<AppState>,
-    Json(request): Json<CreateProjectRequest>,
-) -> Result<AppJson<CreateProjectResponse>, ApiError> {
-    Ok(AppJson(state.app.create_project(request).await?))
 }

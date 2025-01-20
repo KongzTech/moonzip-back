@@ -1,6 +1,10 @@
+MOONZIP_AUTHORITY=mau6Cw3hZX7sPNtDcq69wNyyMbsNcUrubRmTPvtnkTN
 GLOBAL_ENV=eval '\
-	export MOONZIP_AUTHORITY=mau6Cw3hZX7sPNtDcq69wNyyMbsNcUrubRmTPvtnkTN \
+	export MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) \
   '
+PUSH_TO_ENV=eval '\
+	rsync -e "docker exec -i" -Pavz --exclude-from=".dockerignore" --exclude-from=".gitignore" --exclude-from="$$HOME/.config/git/ignore" --filter "- .git/" . moonzip-dev-env:/app \
+	'
 
 ifneq (,$(filter n,$(MAKEFLAGS)))
 GLOBAL_ENV=: GLOBAL_ENV
@@ -32,10 +36,26 @@ lint:
 
 .PHONY: dev-env
 dev-env:
-	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db" > .env
-	docker compose -f dev/docker-compose.dev.yml down -v && docker compose -f dev/docker-compose.dev.yml up -d
+	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
+	echo "SQLX_OFFLINE=true" >> .env
+	docker compose -f dev/docker-compose.dev.yml down -v && docker compose -f dev/docker-compose.dev.yml up -d --wait
 	sqlx migrate run --source backend/db/migrations
+
+.PHONY: enter-dev-env
+enter-dev-env:
+	DOCKER_BUILDKIT=1 docker build -t moonzip/ci:latest -f docker/Dockerfile.ci .
+	DOCKER_BUILDKIT=1 docker build -t moonzip/dev:latest -f docker/Dockerfile.dev .
+
+	docker rm -f moonzip-dev-env
+	docker run --name=moonzip-dev-env -v rust-cache:/app/target -v node-cache:/app/node_modules --net=host -e MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) -e DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable -e SQLX_OFFLINE=true -t -d --rm moonzip/dev:latest /bin/bash
+	${PUSH_TO_ENV}
+	docker exec -it moonzip-dev-env /bin/bash
+
+.PHONY: push-dev-env
+push-dev-env:
+	${PUSH_TO_ENV}
 
 .PHONY: pre-commit
 pre-commit:
 	cargo sqlx prepare --workspace
+

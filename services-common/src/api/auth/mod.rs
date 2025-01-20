@@ -207,10 +207,23 @@ mod tests {
         time::{sleep, Instant},
     };
 
-    use crate::{log::setup_log, utils::decode_response_type_or_raw};
+    use crate::utils::decode_response_type_or_raw;
 
     use super::*;
     use tracing::{error, info};
+
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    fn setup_log() {
+        let trace_filter =
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "services-common=debug,tower_http=info,axum::rejection=trace,axum=info".into()
+            });
+        tracing_subscriber::registry()
+            .with(trace_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
 
     async fn wait_active(port: u16) -> anyhow::Result<()> {
         let check = || async {

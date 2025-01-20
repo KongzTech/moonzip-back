@@ -1,7 +1,11 @@
 use derive_more::derive::Deref;
 use serde::{Deserialize, Serialize};
+use sqlx::query;
 
+pub mod misc;
 pub mod project;
+
+pub type DBTransaction<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StorageConfig {
@@ -30,5 +34,13 @@ impl StorageClient {
             .connect(&config.url)
             .await?;
         Ok(Self::new(pool))
+    }
+
+    pub async fn serializable_tx(&self) -> anyhow::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let mut tx = self.pool.begin().await?;
+        query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await?;
+        Ok(tx)
     }
 }

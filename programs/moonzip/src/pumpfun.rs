@@ -32,6 +32,18 @@ pub struct CurveWrapper {
     pub token_total_supply: u64,
 }
 
+impl CurveWrapper {
+    pub fn initial(global: &pumpfun_cpi::Global) -> Self {
+        Self {
+            virtual_token_reserves: global.initial_virtual_token_reserves,
+            virtual_sol_reserves: global.initial_virtual_sol_reserves,
+            real_token_reserves: global.initial_real_token_reserves,
+            real_sol_reserves: 0,
+            token_total_supply: global.token_total_supply,
+        }
+    }
+}
+
 impl From<BondingCurve> for CurveWrapper {
     fn from(curve: BondingCurve) -> Self {
         Self {
@@ -41,6 +53,23 @@ impl From<BondingCurve> for CurveWrapper {
             real_sol_reserves: curve.real_sol_reserves,
             token_total_supply: curve.token_total_supply,
         }
+    }
+}
+
+pub struct BuyCalculator<'a> {
+    curve: &'a CurveWrapper,
+}
+
+impl<'a> BuyCalculator<'a> {
+    pub fn new(curve: &'a CurveWrapper) -> Self {
+        Self { curve }
+    }
+
+    pub fn fixed_sols(&self, sols: u64) -> u64 {
+        let constant = constant(self.curve);
+        let new_token_reserves =
+            constant / (self.curve.virtual_sol_reserves as u128 + sols as u128) + 1;
+        (self.curve.virtual_token_reserves as u128).saturating_sub(new_token_reserves) as u64
     }
 }
 

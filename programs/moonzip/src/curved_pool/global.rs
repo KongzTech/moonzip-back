@@ -2,7 +2,7 @@ use super::curve::CurveConfig;
 use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
 use anchor_lang::{prelude::*, solana_program::native_token::LAMPORTS_PER_SOL};
 
-pub const GLOBAL_ACCOUNT_PREFIX: &[u8] = b"global-account";
+pub const GLOBAL_ACCOUNT_PREFIX: &[u8] = b"curved-pool-global-account";
 
 pub fn set_global_config(
     ctx: Context<SetCurvedPoolGlobalConfigAccounts>,

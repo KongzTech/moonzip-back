@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM token_meta WHERE project_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "project_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "symbol",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "website",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "twitter",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "telegram",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "deployed_url",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8758d5c4d4c637ffa8660a2509627a99c9b146dbda2e105aa1d1ba4fa61d0648"
+}

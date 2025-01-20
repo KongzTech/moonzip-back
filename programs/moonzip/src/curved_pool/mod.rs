@@ -1,4 +1,7 @@
-use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
+use crate::{
+    ensure_account_size, utils::Sizable, Project, ProjectId, ProjectStage, PROGRAM_AUTHORITY,
+    PROJECT_PREFIX,
+};
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::{
     associated_token::AssociatedToken,
@@ -13,7 +16,13 @@ pub mod global;
 pub const CURVED_POOL_PREFIX: &[u8] = b"curved-pool";
 pub const DEFAULT_MIN_TRADEABLE_SOL: u64 = 1_000;
 
+pub fn curved_pool_address(mint: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[CURVED_POOL_PREFIX, mint.as_ref()], &crate::ID).0
+}
+
 pub fn create(ctx: Context<CreateCurvedPoolAccounts>, data: CreateCurvedPoolData) -> Result<()> {
+    ctx.accounts.project.ensure_can_create_curved_pool()?;
+
     anchor_spl::token::mint_to(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -32,14 +41,17 @@ pub fn create(ctx: Context<CreateCurvedPoolAccounts>, data: CreateCurvedPoolData
         config: data.config,
         curve,
         status: CurvedPoolStatus::Active,
+        project_id: data.project_id,
         bump: ctx.bumps.pool,
     });
+
+    ctx.accounts.project.stage = ProjectStage::CurvePoolActive;
 
     Ok(())
 }
 
 pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
-    if !matches!(ctx.accounts.pool.status, CurvedPoolStatus::Closed) {
+    if !ctx.accounts.pool.close_if_needed() {
         return err!(CurvedPoolError::NotClosed);
     }
 
@@ -56,6 +68,10 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
 }
 
 pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData) -> Result<()> {
+    if ctx.accounts.pool.status == CurvedPoolStatus::Closed {
+        return err!(CurvedPoolError::AlreadyClosed);
+    }
+
     let sols = BuyCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
     if sols > data.max_sol_cost {
         return err!(CurvedPoolError::SlippageFailure);
@@ -65,7 +81,11 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
     }
 
     ctx.accounts.pool.curve.commit_buy(sols, data.tokens);
-    ctx.accounts.pool.close_if_needed();
+
+    if ctx.accounts.pool.close_if_needed() {
+        ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
+    }
+
     let bump = &[ctx.accounts.pool.bump][..];
 
     anchor_spl::token::transfer(
@@ -96,6 +116,10 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
 }
 
 pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolData) -> Result<()> {
+    if ctx.accounts.pool.status == CurvedPoolStatus::Closed {
+        return err!(CurvedPoolError::AlreadyClosed);
+    }
+
     let sols = SellCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
     if sols < data.min_sol_output {
         return err!(CurvedPoolError::SlippageFailure);
@@ -104,6 +128,10 @@ pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolDa
         return err!(CurvedPoolError::SolLimitReached);
     }
     ctx.accounts.pool.curve.commit_sell(data.tokens, sols);
+
+    if ctx.accounts.pool.close_if_needed() {
+        ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
+    }
 
     anchor_spl::token::transfer(
         CpiContext::new(
@@ -151,13 +179,17 @@ pub struct CurvedPool {
     pub config: CurvedPoolConfig,
     pub curve: CurveState,
     pub status: CurvedPoolStatus,
+    pub project_id: ProjectId,
     pub bump: u8,
 }
 
 impl CurvedPool {
-    pub fn close_if_needed(&mut self) {
+    pub fn close_if_needed(&mut self) -> bool {
         if self.curve.sol_balance() >= self.config.max_lamports {
             self.status = CurvedPoolStatus::Closed;
+            true
+        } else {
+            false
         }
     }
 }
@@ -169,6 +201,7 @@ impl Sizable for CurvedPool {
             config: Sizable::longest(),
             status: Sizable::longest(),
             curve: Sizable::longest(),
+            project_id: Sizable::longest(),
             bump: Sizable::longest(),
         }
     }
@@ -192,17 +225,25 @@ impl Sizable for CurvedPoolStatus {
     }
 }
 
-ensure_account_size!(CurvedPool, 99);
+ensure_account_size!(CurvedPool, 115);
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CreateCurvedPoolData {
     config: CurvedPoolConfig,
+    project_id: ProjectId,
 }
 
 #[derive(Accounts)]
+#[instruction(data: CreateCurvedPoolData)]
 pub struct CreateCurvedPoolAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
+    )]
+    pub project: Account<'info, Project>,
 
     #[account(
         seeds = [GLOBAL_ACCOUNT_PREFIX], bump=global.bump
@@ -212,7 +253,7 @@ pub struct CreateCurvedPoolAccounts<'info> {
     #[account(
         init,
         payer = authority,
-        mint::decimals = 9,
+        mint::decimals = global.config.token_decimals,
         mint::authority = authority,
         mint::freeze_authority = authority
     )]
@@ -240,14 +281,23 @@ pub struct CreateCurvedPoolAccounts<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Default, Debug)]
 pub struct BuyFromCurvedPoolData {
+    pub project_id: ProjectId,
     pub tokens: u64,
     pub max_sol_cost: u64,
 }
 
 #[derive(Accounts)]
+#[instruction(data: BuyFromCurvedPoolData)]
 pub struct BuyFromCurvedPoolAccounts<'info> {
     #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = project.id == pool.project_id,
+        seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
+    )]
+    pub project: Account<'info, Project>,
 
     #[account(mut)]
     pub user: Signer<'info>,
@@ -282,14 +332,23 @@ pub struct BuyFromCurvedPoolAccounts<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct SellFromCurvedPoolData {
+    pub project_id: ProjectId,
     pub tokens: u64,
     pub min_sol_output: u64,
 }
 
 #[derive(Accounts)]
+#[instruction(data: SellFromCurvedPoolData)]
 pub struct SellFromCurvedPoolAccounts<'info> {
     #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = project.id == pool.project_id,
+        seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
+    )]
+    pub project: Account<'info, Project>,
 
     #[account(mut)]
     pub user: Signer<'info>,
@@ -351,6 +410,12 @@ pub struct GraduateCurvedPoolAccounts<'info> {
 
 #[error_code]
 pub enum CurvedPoolError {
+    #[msg("Pool is already closed")]
+    AlreadyClosed,
+
+    #[msg("Pool already exists for given project")]
+    AlreadyCreated,
+
     #[msg("Slippage failure: curve represents higher price")]
     SlippageFailure,
 

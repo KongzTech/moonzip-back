@@ -1,0 +1,12 @@
+# You can use this Dockerfile to run tests deterministically locally
+
+# Builds from `Dockerfile.ci`
+FROM moonzip/ci:latest
+
+WORKDIR /app
+SHELL ["/bin/bash", "-c"]
+
+RUN solana-keygen new --no-bip39-passphrase && \
+    solana config set --url http:localhost:8899
+
+RUN export DEBIAN_FRONTEND=noninteractive && apt update && apt install -y rsync

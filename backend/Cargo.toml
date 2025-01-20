@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+services-common = { path = "../services-common" }
+
 config = { version = "0.15" }
 moonzip = { path = "../programs/moonzip" }
 tokio = { version = "1", features = ["full"] }
@@ -12,16 +14,19 @@ anyhow = "1"
 thiserror = "2"
 once_cell = "1"
 derive_more = { version = "1", features = ["deref"] }
+governor = "0.8"
+validator = { version = "0.19", features = ["derive"] }
 
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = [
     "postgres",
     "runtime-tokio-rustls",
     "macros",
-    "bigdecimal",
+    "rust_decimal",
     "uuid",
     "chrono",
 ] }
+rust_decimal = { version = "1.36", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 serde = { version = "1.0", features = ["derive"] }
@@ -33,8 +38,12 @@ bincode = "1"
 bs58 = "0.5"
 
 solana-sdk = "1.18.26"
+solana-program = "1.18.26"
 solana-client = "1.18.26"
 anchor-client = { version = "0.30", features = ["async"] }
+anchor-spl = { version = "0.30.1", features = ["associated_token", "token"] }
+pumpfun-cpi = { path = "../integrations/pumpfun-cpi" }
+locker = { git = "https://github.com/jup-ag/jup-lock.git", features = ["cpi"] }
 
 axum = { version = "0.8", features = ["macros"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }

@@ -1,0 +1,127 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                id,\n                owner,\n                deploy_schema AS \"deploy_schema: _\",\n                stage AS \"stage: _\",\n                static_pool_mint AS \"static_pool_mint?: _\",\n                curve_pool_mint AS \"curve_pool_mint?: _\",\n                created_at\n            FROM project WHERE stage != $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "deploy_schema: _",
+        "type_info": {
+          "Custom": {
+            "name": "deploy_schema",
+            "kind": {
+              "Composite": [
+                [
+                  "use_static_pool",
+                  "Bool"
+                ],
+                [
+                  "curve_pool",
+                  {
+                    "Custom": {
+                      "name": "curve_variant",
+                      "kind": {
+                        "Enum": [
+                          "Moonzip",
+                          "Pumpfun"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                [
+                  "launch_after",
+                  "Interval"
+                ],
+                [
+                  "dev_purchase",
+                  {
+                    "Custom": {
+                      "name": "balance",
+                      "kind": {
+                        "Domain": "Numeric"
+                      }
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "stage: _",
+        "type_info": {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "OnStaticPool",
+                "StaticPoolClosedOnCurvePool",
+                "CurvePoolClosed",
+                "Graduated"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "static_pool_mint?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "curve_pool_mint?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "OnStaticPool",
+                "StaticPoolClosedOnCurvePool",
+                "CurvePoolClosed",
+                "Graduated"
+              ]
+            }
+          }
+        },
+        "Timestamptz",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "56d695f8f91c3b5567f6fc8e9822c84f47235ed8cc62bff2ace8ad0997871719"
+}

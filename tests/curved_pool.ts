@@ -9,7 +9,9 @@ import {
 import { Moonzip } from "../target/types/moonzip";
 import {
   airdrop,
+  createProject,
   getAuthority,
+  getProjectAddress,
   keypairFromFile,
   mintToken,
   tokenBalance,
@@ -60,7 +62,10 @@ async function provideConfig() {
   console.log("global config provided for curved pool");
 }
 
-export async function createCurvedPool(mint: Keypair): Promise<PublicKey> {
+export async function createCurvedPool(
+  project_id: BN,
+  mint: Keypair
+): Promise<PublicKey> {
   const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
   const connection = main_program.provider.connection;
 
@@ -71,15 +76,20 @@ export async function createCurvedPool(mint: Keypair): Promise<PublicKey> {
 
   const authority = getAuthority();
   const poolAddress = getCurvedPoolAddress(mint.publicKey);
+  const projectAddress = getProjectAddress(project_id);
 
   await airdrop(authority.publicKey, new BN(LAMPORTS_PER_SOL));
   await provideConfig();
 
   let signature = await main_program.methods
-    .createCurvedPool({ config: config })
+    .createCurvedPool({
+      config: config,
+      projectId: { 0: project_id },
+    })
     .accounts({
       authority: authority.publicKey,
       mint: mint.publicKey,
+      project: projectAddress,
     })
     .signers([authority, mint])
     .rpc();
@@ -111,7 +121,18 @@ describe("curved pool", () => {
     const sellAmount = new BN(80000000);
     const poolMint = anchor.web3.Keypair.generate();
 
-    const poolAddress = await createCurvedPool(poolMint);
+    await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
+
+    let randomId = new BN(Math.floor(Math.random() * 100000).toString());
+    await createProject(user, randomId, {
+      useStaticPool: false,
+      curvePool: {
+        moonzip: {},
+      },
+      devPurchase: null,
+    });
+
+    const poolAddress = await createCurvedPool(randomId, poolMint);
 
     let state = await main_program.account.curvedPool.fetch(poolAddress);
 
@@ -138,15 +159,19 @@ describe("curved pool", () => {
     console.log(
       `starting to purchasing from pool with owner ${user.publicKey}`
     );
-    await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
 
     const preBuyBalance = await connection.getBalance(user.publicKey);
     let signature = await main_program.methods
-      .buyFromCurvedPool({ tokens: buyAmount, maxSolCost: new BN(100000) })
+      .buyFromCurvedPool({
+        tokens: buyAmount,
+        maxSolCost: new BN(100000),
+        projectId: { 0: randomId },
+      })
       .accounts({
         authority: authority.publicKey,
         mint: poolMint.publicKey,
         user: user.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, user])
       .rpc();
@@ -180,11 +205,16 @@ describe("curved pool", () => {
 
     console.log("starting to selling back to pool");
     signature = await main_program.methods
-      .sellFromCurvedPool({ tokens: sellAmount, minSolOutput: new BN(0) })
+      .sellFromCurvedPool({
+        projectId: { 0: randomId },
+        tokens: sellAmount,
+        minSolOutput: new BN(0),
+      })
       .accounts({
         authority: authority.publicKey,
         mint: poolMint.publicKey,
         user: user.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, user])
       .rpc();

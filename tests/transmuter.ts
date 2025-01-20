@@ -1,7 +1,9 @@
 import { Program } from "@coral-xyz/anchor";
 import {
   airdrop,
+  createProject,
   getAuthority as getAuthority,
+  getProjectAddress,
   mintToken,
   takeFee,
   tokenBalance,
@@ -69,33 +71,33 @@ describe("transmuter", () => {
       userFromBalance
     );
 
-    const poolAddress = await createCurvedPool(curveMint);
+    let randomId = new BN(Math.floor(Math.random() * 100000).toString());
+    await createProject(user, randomId, {
+      useStaticPool: false,
+      curvePool: {
+        moonzip: {},
+      },
+      devPurchase: null,
+    });
+
+    const poolAddress = await createCurvedPool(randomId, curveMint);
 
     const transmuterAddress = getTransmuterAddress(
       fromMint.publicKey,
       curveMint.publicKey
     );
-    let signature = await main_program.methods
-      .createTransmuter()
-      .accounts({
-        authority: authority.publicKey,
-        fromMint: fromMint.publicKey,
-        toMint: curveMint.publicKey,
-      })
-      .signers([authority])
-      .rpc();
-    await connection.confirmTransaction(signature);
-    console.log("created transmuter with key", transmuterAddress.toBase58());
 
-    signature = await main_program.methods
+    let signature = await main_program.methods
       .buyFromCurvedPool({
         tokens: transmuterBalance,
         maxSolCost: new BN(1000000),
+        projectId: { 0: randomId },
       })
       .accounts({
         authority: authority.publicKey,
         user: authority.publicKey,
         mint: curveMint.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority])
       .rpc();
@@ -109,6 +111,7 @@ describe("transmuter", () => {
           authority: authority.publicKey,
           fromMint: fromMint.publicKey,
           toMint: curveMint.publicKey,
+          donor: authority.publicKey,
         },
         curvedPool: poolAddress,
       })
@@ -116,21 +119,6 @@ describe("transmuter", () => {
       .rpc();
     await connection.confirmTransaction(signature);
     console.log("initialized transmuter for curve");
-
-    const tx = new anchor.web3.Transaction().add(
-      createTransferInstruction(
-        getAssociatedTokenAddressSync(curveMint.publicKey, authority.publicKey),
-        getAssociatedTokenAddressSync(
-          curveMint.publicKey,
-          transmuterAddress,
-          true
-        ),
-        authority.publicKey,
-        transmuterBalance.toNumber()
-      )
-    );
-
-    await provider.sendAndConfirm(tx, [authority]);
 
     const transmuter = await main_program.account.transmuter.fetch(
       transmuterAddress
@@ -172,11 +160,13 @@ describe("transmuter", () => {
       .sellFromCurvedPool({
         tokens: new BN(userToBalance),
         minSolOutput: new BN(0),
+        projectId: { 0: randomId },
       })
       .accounts({
         authority: authority.publicKey,
         mint: curveMint.publicKey,
         user: user.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, user])
       .rpc();
@@ -216,31 +206,20 @@ describe("transmuter", () => {
       fromMint.publicKey,
       curveMint.publicKey
     );
-    let signature = await main_program.methods
-      .createTransmuter()
-      .accounts({
-        authority: authority.publicKey,
-        fromMint: fromMint.publicKey,
-        toMint: curveMint.publicKey,
-      })
-      .signers([authority])
-      .rpc();
-    await connection.confirmTransaction(signature);
-    console.log("created transmuter with key", transmuterAddress.toBase58());
-
     await buyFromPumpfun(curveMint.publicKey, authority, transmuterBalance);
     console.log(
       "bought from bunding curve for user",
       authority.publicKey.toBase58()
     );
 
-    signature = await main_program.methods
+    let signature = await main_program.methods
       .initTransmuterForPumpfunCurve()
       .accounts({
         base: {
           authority: authority.publicKey,
           fromMint: fromMint.publicKey,
           toMint: curveMint.publicKey,
+          donor: authority.publicKey,
         },
         bondingCurve: curveAddress,
       })
@@ -248,21 +227,6 @@ describe("transmuter", () => {
       .rpc();
     await connection.confirmTransaction(signature);
     console.log("initialized transmuter for curve");
-
-    const tx = new anchor.web3.Transaction().add(
-      createTransferInstruction(
-        getAssociatedTokenAddressSync(curveMint.publicKey, authority.publicKey),
-        getAssociatedTokenAddressSync(
-          curveMint.publicKey,
-          transmuterAddress,
-          true
-        ),
-        authority.publicKey,
-        transmuterBalance.toNumber()
-      )
-    );
-
-    await provider.sendAndConfirm(tx, [authority]);
 
     const transmuter = await main_program.account.transmuter.fetch(
       transmuterAddress

@@ -1,14 +1,18 @@
-use crate::{solana::SolanaPool, utils::serialize_tx_bs58};
-use moonzip::project::CreateProjectData;
+use anyhow::Context as _;
+use instructions::InstructionsBuilder;
 use serde::{Deserialize, Serialize};
+use services_common::{solana::pool::SolanaPool, utils::serialize_tx_bs58};
 use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
-use state::{
-    project::{DeploySchema, TokenMeta},
+use storage::{
+    project::{DeploySchema, StoredTokenImage},
     StorageClient,
 };
 use uuid::Uuid;
+use validator::Validate;
 
-pub mod state;
+mod instructions;
+pub mod migrator;
+pub mod storage;
 
 pub struct App {
     storage: StorageClient,
@@ -27,49 +31,72 @@ impl App {
         &self,
         request: CreateProjectRequest,
     ) -> anyhow::Result<CreateProjectResponse> {
-        let project = state::project::Project {
+        request
+            .deploy_schema
+            .validate()
+            .context("validate deploy schema")?;
+
+        let mut project = storage::project::StoredProject {
             id: Uuid::new_v4(),
             owner: request.owner.into(),
-            token_meta: request.meta,
             deploy_schema: request.deploy_schema.clone(),
-            stage: state::project::Stage::Created,
+            stage: storage::project::Stage::Created,
+            static_pool_mint: None,
+            curve_pool_mint: None,
             created_at: chrono::Utc::now(),
         };
-        let project_id = state::project::project_id(&project.id);
-        let project_address = state::project::project_address(&project_id);
+        let mut builder = InstructionsBuilder {
+            project: &mut project,
+            solana_pool: self.solana_pool.clone(),
+        };
+        let mut ixs = vec![];
+        ixs.extend(builder.create_project()?);
+        ixs.extend(builder.init_static_pool()?);
 
-        let client = self.solana_pool.for_authority();
-        let program = client.program(moonzip::ID)?;
+        let transaction = Transaction::new_with_payer(&ixs, Some(&request.owner));
 
-        let ix = program
-            .request()
-            .accounts(moonzip::accounts::CreateProjectAccounts {
-                authority: moonzip::PROGRAM_AUTHORITY,
-                creator: request.owner,
-                project: project_address,
-                system_program: solana_sdk::system_program::ID,
-            })
-            .args(moonzip::instruction::CreateProject {
-                data: CreateProjectData {
-                    id: project_id,
-                    schema: request.deploy_schema.to_project_schema(),
-                },
-            })
-            .instructions()?;
+        let image = StoredTokenImage {
+            project_id: project.id,
+            image_content: request.meta.image_content,
+        };
 
-        let transaction = Transaction::new_with_payer(&ix, Some(&request.owner));
+        let mut tx = self.storage.serializable_tx().await?;
 
         sqlx::query!(
-            "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7)",
             project.id,
             project.owner as _,
-            project.token_meta as _,
             project.deploy_schema as _,
             project.stage as _,
+            project.static_pool_mint as _,
+            project.curve_pool_mint as _,
             project.created_at
         )
-        .execute(&*self.storage)
+        .execute(&mut *tx)
         .await?;
+
+        sqlx::query!(
+            "INSERT INTO token_meta VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            project.id,
+            request.meta.name,
+            request.meta.symbol,
+            request.meta.description,
+            request.meta.website,
+            request.meta.twitter,
+            request.meta.telegram,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query!(
+            "INSERT INTO token_image VALUES ($1, $2)",
+            project.id,
+            image.image_content
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
 
         Ok(CreateProjectResponse {
             project_id: project.id,
@@ -82,8 +109,21 @@ impl App {
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectRequest {
     pub owner: Pubkey,
-    pub meta: TokenMeta,
+    pub meta: CreateTokenMeta,
     pub deploy_schema: DeploySchema,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreateTokenMeta {
+    pub name: String,
+    pub symbol: String,
+    pub description: String,
+
+    pub image_content: Vec<u8>,
+
+    pub website: Option<String>,
+    pub twitter: Option<String>,
+    pub telegram: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

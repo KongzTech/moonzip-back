@@ -11,6 +11,7 @@ import {
   airdrop,
   createProject,
   getAuthority,
+  getProjectAddress,
   keypairFromFile,
   mintToken,
   tokenBalance,
@@ -70,6 +71,7 @@ describe("static pool", () => {
       curvePool: {
         moonzip: {},
       },
+      devPurchase: null,
     });
 
     let signature = await main_program.methods
@@ -77,6 +79,7 @@ describe("static pool", () => {
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, mint])
       .rpc();
@@ -109,11 +112,12 @@ describe("static pool", () => {
     console.log("starting to purchasing from static pool");
 
     signature = await main_program.methods
-      .buyFromStaticPool({ amount: firstAmount })
+      .buyFromStaticPool({ amount: firstAmount, projectId: { 0: randomId } })
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
         user: firstBuyer.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, firstBuyer])
       .rpc();
@@ -133,11 +137,12 @@ describe("static pool", () => {
     expect(Number(token_account.amount)).to.eql(firstAmount.toNumber());
 
     signature = await main_program.methods
-      .buyFromStaticPool({ amount: secondAmount })
+      .buyFromStaticPool({ amount: secondAmount, projectId: { 0: randomId } })
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
         user: secondBuyer.publicKey,
+        project: getProjectAddress(randomId),
       })
       .signers([authority, secondBuyer])
       .rpc();

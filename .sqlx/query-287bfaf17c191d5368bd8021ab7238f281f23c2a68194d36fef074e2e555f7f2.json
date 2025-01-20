@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE token_meta SET deployed_url = $1 WHERE project_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "287bfaf17c191d5368bd8021ab7238f281f23c2a68194d36fef074e2e555f7f2"
+}

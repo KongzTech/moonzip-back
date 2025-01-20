@@ -27,6 +27,14 @@ pub mod moonzip {
         project::create(ctx, data)
     }
 
+    pub fn project_lock_latch(ctx: Context<ProjectLockLatchAccounts>) -> Result<()> {
+        project::lock_latch(ctx)
+    }
+
+    pub fn project_unlock_latch(ctx: Context<ProjectUnlockLatchAccounts>) -> Result<()> {
+        project::unlock_latch(ctx)
+    }
+
     pub fn create_static_pool(
         ctx: Context<CreateStaticPoolAccounts>,
         data: CreateStaticPoolData,
@@ -43,6 +51,13 @@ pub mod moonzip {
         data: BuyFromStaticPoolData,
     ) -> Result<()> {
         static_pool::buy(ctx, data)
+    }
+
+    pub fn sell_from_static_pool(
+        ctx: Context<SellToStaticPoolAccounts>,
+        data: SellToStaticPoolData,
+    ) -> Result<()> {
+        static_pool::sell(ctx, data)
     }
 
     pub fn set_curved_pool_global_config(
@@ -75,10 +90,6 @@ pub mod moonzip {
         data: SellFromCurvedPoolData,
     ) -> Result<()> {
         curved_pool::sell(ctx, data)
-    }
-
-    pub fn create_transmuter(ctx: Context<CreateTransmuterAccounts>) -> Result<()> {
-        transmuter::create(ctx)
     }
 
     pub fn init_transmuter_for_curve(ctx: Context<InitTransmuterForCurveAccounts>) -> Result<()> {
