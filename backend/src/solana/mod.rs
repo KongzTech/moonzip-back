@@ -6,8 +6,9 @@ pub struct SolanaKeysConfig {
     pub authority: SaneKeypair,
 }
 
+#[derive(Debug, Clone)]
 pub struct SolanaKeys {
-    pub authority: SaneKeypair,
+    authority: SaneKeypair,
 }
 
 impl SolanaKeys {

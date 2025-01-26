@@ -9,6 +9,12 @@ use solana_sdk::{signature::Keypair, signer::Signer};
 #[derive(Deserialize, PartialEq)]
 pub struct SaneKeypair(#[serde(deserialize_with = "deserialize_keypair")] Arc<Keypair>);
 
+impl SaneKeypair {
+    pub fn to_keypair(&self) -> Keypair {
+        self.0.insecure_clone()
+    }
+}
+
 impl Clone for SaneKeypair {
     fn clone(&self) -> Self {
         Self(self.0.clone())

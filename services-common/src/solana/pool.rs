@@ -1,7 +1,9 @@
+use super::jito::{JitoClient, JitoClientConfig};
 use crate::utils::{
     keypair::SaneKeypair,
     limiter::{LimiterGuard, RateLimitConfig},
 };
+use derive_more::derive::Deref;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use solana_client::nonblocking::rpc_client::RpcClient;
@@ -10,28 +12,40 @@ use std::sync::{atomic, Arc};
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct SolanaPoolConfig {
-    pub clients: Vec<SolanaClientConfig>,
+    pub rpc_clients: Vec<SolanaClientConfig>,
+    pub jito_clients: Vec<JitoClientConfig>,
 }
 
 #[derive(Clone)]
 pub struct SolanaPool {
-    clients: Arc<Balancer<SolanaClient>>,
+    rpc_clients: Arc<Balancer<SolanaRpcClient>>,
+    jito_clients: Arc<Balancer<JitoClient>>,
 }
 
 impl SolanaPool {
     pub fn from_cfg(cfg: SolanaPoolConfig) -> anyhow::Result<Self> {
-        let clients = cfg
-            .clients
+        let rpc_clients = cfg
+            .rpc_clients
             .iter()
-            .map(|client_cfg| SolanaClient::new(client_cfg.clone()))
+            .map(|client_cfg| SolanaRpcClient::new(client_cfg.clone()))
+            .collect::<Vec<_>>();
+        let jito_clients = cfg
+            .jito_clients
+            .iter()
+            .map(|client_cfg| JitoClient::new(client_cfg.clone()))
             .collect::<Vec<_>>();
         Ok(Self {
-            clients: Arc::new(Balancer::new(clients)),
+            rpc_clients: Arc::new(Balancer::new(rpc_clients)),
+            jito_clients: Arc::new(Balancer::new(jito_clients)),
         })
     }
 
-    pub fn client(&self) -> &SolanaClient {
-        self.clients.next()
+    pub fn rpc_client(&self) -> &SolanaRpcClient {
+        self.rpc_clients.next()
+    }
+
+    pub fn jito_client(&self) -> &JitoClient {
+        self.jito_clients.next()
     }
 
     pub fn builder(&self) -> anchor_client::Client<SaneKeypair> {
@@ -40,19 +54,16 @@ impl SolanaPool {
     }
 }
 
-pub struct SolanaClient {
+#[derive(Deref)]
+pub struct SolanaRpcClient {
     rpc_client: LimiterGuard<RpcClient>,
 }
 
-impl SolanaClient {
+impl SolanaRpcClient {
     pub fn new(config: SolanaClientConfig) -> Self {
         let rpc_client = RpcClient::new(config.node.rpc_url());
         let rpc_client = LimiterGuard::new(rpc_client, config.limit.limiter());
         Self { rpc_client }
-    }
-
-    pub fn rpc(&self) -> &LimiterGuard<RpcClient> {
-        &self.rpc_client
     }
 }
 

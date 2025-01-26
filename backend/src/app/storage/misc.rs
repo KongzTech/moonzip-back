@@ -1,8 +1,7 @@
 use derive_more::derive::{From, Into};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use solana_sdk::pubkey::Pubkey;
-
+use solana_sdk::{pubkey::Pubkey, signature::Keypair};
 #[derive(
     Debug, Serialize, Deserialize, sqlx::Type, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -24,6 +23,34 @@ impl From<Pubkey> for StoredPubkey {
 impl From<StoredPubkey> for Pubkey {
     fn from(value: StoredPubkey) -> Self {
         Pubkey::try_from(value.0.as_slice()).expect("invariant: invalid stored pubkey")
+    }
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, sqlx::Type, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord,
+)]
+#[sqlx(transparent, type_name = "keypair")]
+pub struct StoredKeypair(Vec<u8>);
+
+impl StoredKeypair {
+    pub fn to_keypair(&self) -> Keypair {
+        Keypair::from_bytes(self.0.as_slice()).expect("invariant: invalid stored secret key")
+    }
+
+    pub fn from_keypair(keypair: &Keypair) -> Self {
+        Self(keypair.to_bytes().to_vec())
+    }
+}
+
+impl From<Keypair> for StoredKeypair {
+    fn from(value: Keypair) -> Self {
+        Self(value.to_bytes().to_vec())
+    }
+}
+
+impl From<StoredKeypair> for Keypair {
+    fn from(value: StoredKeypair) -> Self {
+        Keypair::from_bytes(value.0.as_slice()).expect("invariant: invalid stored keypair")
     }
 }
 

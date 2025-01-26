@@ -1,8 +1,9 @@
-use super::misc::{Balance, StoredPubkey};
+use super::misc::{Balance, StoredKeypair, StoredPubkey};
 use chrono::DateTime;
 use moonzip::project::{CurvePoolVariant, ProjectSchema};
 use serde::{Deserialize, Serialize};
 use services_common::TZ;
+use solana_sdk::{pubkey::Pubkey, signer::Signer};
 use sqlx::types::Uuid;
 use validator::Validate;
 
@@ -18,9 +19,21 @@ pub struct StoredProject {
     pub owner: StoredPubkey,
     pub deploy_schema: DeploySchema,
     pub stage: Stage,
-    pub static_pool_mint: Option<StoredPubkey>,
-    pub curve_pool_mint: Option<StoredPubkey>,
+    pub static_pool_pubkey: Option<StoredPubkey>,
+    pub curve_pool_keypair: Option<StoredKeypair>,
     pub created_at: DateTime<TZ>,
+}
+
+impl StoredProject {
+    pub fn static_pool_mint(&self) -> Option<Pubkey> {
+        self.static_pool_pubkey.as_ref().map(|key| key.to_pubkey())
+    }
+
+    pub fn curve_pool_mint(&self) -> Option<Pubkey> {
+        self.curve_pool_keypair
+            .as_ref()
+            .map(|key| key.to_keypair().pubkey())
+    }
 }
 
 #[derive(
@@ -47,6 +60,15 @@ pub struct StoredTokenMeta {
     pub twitter: Option<String>,
     pub telegram: Option<String>,
     pub deployed_url: Option<String>,
+}
+
+impl StoredTokenMeta {
+    pub fn deployed_url(&self) -> anyhow::Result<String> {
+        self.deployed_url
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("invariant: token meta is not deployed"))
+    }
 }
 
 #[derive(Debug, sqlx::FromRow, Clone)]
@@ -79,7 +101,7 @@ impl DeploySchema {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, sqlx::Type)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, sqlx::Type)]
 #[serde(rename_all = "camelCase")]
 #[sqlx(type_name = "curve_variant")]
 pub enum CurveVariant {

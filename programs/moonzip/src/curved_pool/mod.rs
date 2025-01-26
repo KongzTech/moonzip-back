@@ -76,8 +76,8 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
     if sols > data.max_sol_cost {
         return err!(CurvedPoolError::SlippageFailure);
     }
-    if sols < ctx.accounts.pool.config.min_tradeable_sol() {
-        return err!(CurvedPoolError::SolLimitReached);
+    if !ctx.accounts.pool.buy_allowed(sols, data.tokens) {
+        return err!(CurvedPoolError::OperationDisallowed);
     }
 
     ctx.accounts.pool.curve.commit_buy(sols, data.tokens);
@@ -124,8 +124,8 @@ pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolDa
     if sols < data.min_sol_output {
         return err!(CurvedPoolError::SlippageFailure);
     }
-    if sols < ctx.accounts.pool.config.min_tradeable_sol() {
-        return err!(CurvedPoolError::SolLimitReached);
+    if !ctx.accounts.pool.sell_allowed(data.tokens, sols) {
+        return err!(CurvedPoolError::OperationDisallowed);
     }
     ctx.accounts.pool.curve.commit_sell(data.tokens, sols);
 
@@ -191,6 +191,18 @@ impl CurvedPool {
         } else {
             false
         }
+    }
+
+    pub fn buy_allowed(&self, sols: u64, tokens: u64) -> bool {
+        // limit order must be disabled for the last tokens
+        if tokens == self.curve.token_balance() {
+            return true;
+        }
+        sols >= self.config.min_tradeable_sol()
+    }
+
+    pub fn sell_allowed(&self, _tokens: u64, sols: u64) -> bool {
+        sols >= self.config.min_tradeable_sol()
     }
 }
 
@@ -419,8 +431,8 @@ pub enum CurvedPoolError {
     #[msg("Slippage failure: curve represents higher price")]
     SlippageFailure,
 
-    #[msg("Transaction amount is limited due to pool config, limit is violated")]
-    SolLimitReached,
+    #[msg("Operation is disallowed due to pool config, some limit is violated")]
+    OperationDisallowed,
 
     #[msg("If close date is specified, it must be future")]
     CloseDateBehindClock,

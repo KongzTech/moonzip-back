@@ -37,7 +37,7 @@ pub fn create(ctx: Context<CreateStaticPoolAccounts>, data: CreateStaticPoolData
 }
 
 pub fn graduate(ctx: Context<GraduateStaticPoolAccounts>) -> Result<()> {
-    if !matches!(ctx.accounts.pool.state, StaticPoolState::Closed) {
+    if !ctx.accounts.pool.close_if_needed() {
         return err!(StaticPoolError::NotClosed);
     }
 
@@ -193,11 +193,10 @@ pub struct StaticPool {
 
 impl StaticPool {
     pub fn close_if_needed(&mut self) -> bool {
-        if self
-            .config
-            .close_conditions
-            .should_be_closed(self.collected_lamports)
-        {
+        if self.config.close_conditions.should_be_closed(
+            self.collected_lamports,
+            Clock::get().unwrap().unix_timestamp as u64,
+        ) {
             self.state = StaticPoolState::Closed;
             true
         } else {

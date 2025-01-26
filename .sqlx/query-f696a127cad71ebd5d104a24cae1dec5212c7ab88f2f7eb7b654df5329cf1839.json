@@ -1,12 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT stage AS \"stage: _\" FROM project WHERE id = $1 FOR UPDATE",
+  "query": "UPDATE project SET stage = $1 WHERE id = $2",
   "describe": {
-    "columns": [
-      {
-        "ordinal": 0,
-        "name": "stage: _",
-        "type_info": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
           "Custom": {
             "name": "project_stage",
             "kind": {
@@ -19,17 +18,11 @@
               ]
             }
           }
-        }
-      }
-    ],
-    "parameters": {
-      "Left": [
+        },
         "Uuid"
       ]
     },
-    "nullable": [
-      false
-    ]
+    "nullable": []
   },
-  "hash": "1fc1407efafaf684b28fbb1b8863d7cdfcf0b2611d629eeca60c0420606894c4"
+  "hash": "f696a127cad71ebd5d104a24cae1dec5212c7ab88f2f7eb7b654df5329cf1839"
 }

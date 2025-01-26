@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "call assign_project_keypair($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4ce590cdba36325019ad0623e795a19842dcbf6b0372dfc70e58b3ca4235f059"
+}

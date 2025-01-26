@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::app::instructions::InstructionsConfig;
+use crate::app::keys_loader;
 use crate::app::migrator::MigratorConfig;
 use crate::app::storage::StorageConfig;
 use crate::solana::SolanaKeysConfig;
@@ -13,4 +15,6 @@ pub struct Config {
     pub keys: SolanaKeysConfig,
     pub solana_pool: SolanaPoolConfig,
     pub migrator: MigratorConfig,
+    pub token_keys_loader: keys_loader::Config,
+    pub instructions: InstructionsConfig,
 }

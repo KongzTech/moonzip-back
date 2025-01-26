@@ -1,12 +1,13 @@
 use anchor_client::anchor_lang::AnchorDeserialize;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use services_common::{solana::pool::SolanaPool, utils::decode_response_type_or_raw};
+use services_common::{
+    solana::pool::SolanaPool,
+    utils::{decode_response_type_or_raw, period_fetch::FetchExecutor},
+};
 use solana_program::pubkey;
-use solana_sdk::pubkey::Pubkey;
+use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 use std::time::Duration;
-use tokio::sync::watch;
-use tracing::error;
 
 pub static MINT_AUTHORITY: Lazy<Pubkey> = Lazy::new(get_mint_authority);
 pub static GLOBAL: Lazy<Pubkey> = Lazy::new(get_global);
@@ -51,6 +52,12 @@ pub struct TokenMetadataResponse {
 
 pub struct HttpClient {
     client: reqwest::Client,
+}
+
+impl Default for HttpClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HttpClient {
@@ -128,67 +135,52 @@ impl HttpClient {
     }
 }
 
-#[derive(Clone)]
-pub struct MetaReceiver(watch::Receiver<Option<Meta>>);
-
-impl MetaReceiver {
-    pub async fn get(&mut self) -> anyhow::Result<Meta> {
-        Ok(self
-            .0
-            .wait_for(|meta| meta.is_some())
-            .await?
-            .as_ref()
-            .map(|meta| meta.clone())
-            .expect("invariant: waited for some"))
-    }
-}
-
 pub struct MetaFetcher {
-    pool: SolanaPool,
+    pub pool: SolanaPool,
 }
 
-static META_TICK_INTERVAL: Lazy<Duration> = Lazy::new(|| Duration::from_secs(60) * 60 * 12);
-static META_ERROR_BACKOFF: Lazy<Duration> = Lazy::new(|| Duration::from_secs(3));
-
-impl MetaFetcher {
-    pub fn new(pool: SolanaPool) -> Self {
-        Self { pool }
+#[async_trait::async_trait]
+impl FetchExecutor<Meta> for MetaFetcher {
+    fn name(&self) -> &'static str {
+        "pumpfun-meta"
     }
 
-    pub fn serve(self) -> MetaReceiver {
-        let (sender, receiver) = watch::channel(None);
-        tokio::spawn(async move {
-            loop {
-                match self.tick(&sender).await {
-                    Ok(_) => {
-                        tokio::time::sleep(*META_TICK_INTERVAL).await;
-                    }
-                    Err(e) => {
-                        error!("failed to fetch pumpfun meta: {}", e);
-                        tokio::time::sleep(*META_ERROR_BACKOFF).await;
-                    }
-                }
-            }
-        });
-        MetaReceiver(receiver)
-    }
-
-    async fn tick(&self, sender: &watch::Sender<Option<Meta>>) -> anyhow::Result<()> {
-        let meta = self.fetch().await?;
-        sender.send(Some(meta))?;
+    async fn init(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn fetch(&self) -> anyhow::Result<Meta> {
-        let client = self.pool.client().rpc().use_single().await;
-        let global = client.get_account_data(&GLOBAL).await?;
+    async fn fetch(&mut self) -> anyhow::Result<Meta> {
+        let client = self.pool.rpc_client().use_single().await;
+        let global = client
+            .get_account_with_commitment(&GLOBAL, CommitmentConfig::finalized())
+            .await?;
+        let marker = global.context.slot;
         Ok(Meta {
-            global_account: pumpfun_cpi::Global::try_from_slice(&global)?,
+            marker,
+            global_account: pumpfun_cpi::Global::try_from_slice(
+                &global
+                    .value
+                    .ok_or_else(|| anyhow::anyhow!("no global curve pool account yet"))?
+                    .data,
+            )?,
         })
     }
 }
 
 #[derive(Clone)]
 pub struct Meta {
+    pub marker: u64,
     pub global_account: pumpfun_cpi::Global,
+}
+
+impl PartialEq for Meta {
+    fn eq(&self, other: &Self) -> bool {
+        self.marker == other.marker
+    }
+}
+
+impl PartialOrd for Meta {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.marker.partial_cmp(&other.marker)
+    }
 }

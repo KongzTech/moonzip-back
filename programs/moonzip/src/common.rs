@@ -7,6 +7,8 @@ use anchor_lang::{
 };
 use derive_more::derive::{From, Into};
 
+const ALLOWED_TIME_DRIFT_SECONDS: u64 = 1;
+
 #[derive(AnchorSerialize, AnchorDeserialize, Default, Clone, PartialEq, PartialOrd)]
 pub struct PoolCloseConditions {
     pub max_lamports: Option<u64>,
@@ -23,13 +25,13 @@ impl Sizable for PoolCloseConditions {
 }
 
 impl PoolCloseConditions {
-    pub fn should_be_closed(&self, balance: u64) -> bool {
+    pub fn should_be_closed(&self, balance: u64, current_ts: u64) -> bool {
         let mut is_closed = false;
         if let Some(max_lamports) = self.max_lamports {
             is_closed = is_closed || (balance == max_lamports);
         }
         if let Some(finish_ts) = self.finish_ts {
-            is_closed = is_closed || (Clock::get().unwrap().unix_timestamp as u64 >= finish_ts)
+            is_closed = is_closed || (current_ts >= finish_ts - ALLOWED_TIME_DRIFT_SECONDS)
         }
         is_closed
     }

@@ -1,8 +1,8 @@
 use anyhow::Context as _;
 use instructions::InstructionsBuilder;
 use serde::{Deserialize, Serialize};
-use services_common::{solana::pool::SolanaPool, utils::serialize_tx_bs58};
-use solana_sdk::{pubkey::Pubkey, transaction::Transaction};
+use services_common::utils::serialize_tx_bs58;
+use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer, transaction::Transaction};
 use storage::{
     project::{DeploySchema, StoredTokenImage},
     StorageClient,
@@ -10,20 +10,21 @@ use storage::{
 use uuid::Uuid;
 use validator::Validate;
 
-mod instructions;
+pub mod instructions;
+pub mod keys_loader;
 pub mod migrator;
 pub mod storage;
 
 pub struct App {
     storage: StorageClient,
-    solana_pool: SolanaPool,
+    instructions_builder: InstructionsBuilder,
 }
 
 impl App {
-    pub async fn new(storage: StorageClient, solana_pool: SolanaPool) -> Self {
+    pub async fn new(storage: StorageClient, instructions_builder: InstructionsBuilder) -> Self {
         Self {
             storage,
-            solana_pool,
+            instructions_builder,
         }
     }
 
@@ -36,22 +37,29 @@ impl App {
             .validate()
             .context("validate deploy schema")?;
 
-        let mut project = storage::project::StoredProject {
+        let static_pool_keypair = if request.deploy_schema.use_static_pool {
+            Some(Keypair::new())
+        } else {
+            None
+        };
+
+        let project = storage::project::StoredProject {
             id: Uuid::new_v4(),
             owner: request.owner.into(),
             deploy_schema: request.deploy_schema.clone(),
             stage: storage::project::Stage::Created,
-            static_pool_mint: None,
-            curve_pool_mint: None,
+            static_pool_pubkey: static_pool_keypair
+                .as_ref()
+                .map(|keypair| keypair.pubkey().into()),
+            curve_pool_keypair: None,
             created_at: chrono::Utc::now(),
         };
-        let mut builder = InstructionsBuilder {
-            project: &mut project,
-            solana_pool: self.solana_pool.clone(),
-        };
+        let mut builder = self.instructions_builder.for_project(&project).await?;
         let mut ixs = vec![];
         ixs.extend(builder.create_project()?);
-        ixs.extend(builder.init_static_pool()?);
+        if let Some(keypair) = static_pool_keypair.as_ref() {
+            ixs.extend(builder.init_static_pool(keypair)?);
+        }
 
         let transaction = Transaction::new_with_payer(&ixs, Some(&request.owner));
 
@@ -68,8 +76,8 @@ impl App {
             project.owner as _,
             project.deploy_schema as _,
             project.stage as _,
-            project.static_pool_mint as _,
-            project.curve_pool_mint as _,
+            project.static_pool_pubkey as _,
+            project.curve_pool_keypair as _,
             project.created_at
         )
         .execute(&mut *tx)

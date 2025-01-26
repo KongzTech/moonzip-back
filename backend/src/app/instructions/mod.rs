@@ -1,5 +1,6 @@
-use super::storage::project::{project_id, StoredProject, StoredTokenMeta};
+use super::storage::project::{project_id, CurveVariant, StoredProject, StoredTokenMeta};
 use anchor_spl::associated_token::get_associated_token_address;
+use anyhow::bail;
 use moonzip::{
     accounts::BaseInitTransmuterAccounts,
     common::PoolCloseConditions,
@@ -8,26 +9,89 @@ use moonzip::{
         CURVED_POOL_PREFIX, TRANSMUTER_PREFIX,
     },
     project::{project_address, CreateProjectData},
+    PROGRAM_AUTHORITY,
 };
-use services_common::{solana::pool::SolanaPool, TZ};
+use mpl_token_metadata::instructions::CreateV1Builder;
+use openbook::OpenbookInstructionsBuilder;
+use serde::Deserialize;
+use serum_dex::instruction::initialize_market;
+use services_common::{solana::pool::SolanaPool, utils::period_fetch::DataReceiver, TZ};
 use solana_sdk::{
-    instruction::Instruction, native_token::LAMPORTS_PER_SOL, pubkey::Pubkey, signature::Keypair,
+    instruction::Instruction,
+    native_token::{sol_to_lamports, LAMPORTS_PER_SOL},
+    pubkey::Pubkey,
+    rent::Rent,
+    signature::Keypair,
     signer::Signer as _,
 };
-use std::time::Duration;
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 mod mpl;
 pub mod mzip;
+pub mod openbook;
 pub mod pumpfun;
+pub mod raydium;
+pub mod solana;
 
-const SOLS_TO_GRADUATE: u64 = LAMPORTS_PER_SOL * 86;
-
-pub struct InstructionsBuilder<'a> {
-    pub solana_pool: SolanaPool,
-    pub project: &'a StoredProject,
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstructionsConfig {
+    #[serde(default = "default_serum_openbook_program")]
+    pub serum_openbook_program: Pubkey,
+    #[serde(default = "default_sols_to_graduate")]
+    pub sols_to_graduate: u64,
+    #[serde(default = "default_rayidum_liquidity")]
+    pub rayidum_liquidity: u64,
+    #[serde(default = "default_creator_graduate_reward")]
+    pub creator_graduate_reward: u64,
 }
 
-impl<'a> InstructionsBuilder<'a> {
+fn default_serum_openbook_program() -> Pubkey {
+    Pubkey::from_str("srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX").unwrap()
+}
+
+fn default_sols_to_graduate() -> u64 {
+    LAMPORTS_PER_SOL * 85
+}
+
+fn default_rayidum_liquidity() -> u64 {
+    LAMPORTS_PER_SOL * 79
+}
+
+fn default_creator_graduate_reward() -> u64 {
+    sol_to_lamports(0.5)
+}
+
+const WRAPPED_SOL_MINT: Pubkey = solana_sdk::pubkey!("So11111111111111111111111111111111111111112");
+#[derive(Clone)]
+pub struct InstructionsBuilder {
+    pub solana_pool: SolanaPool,
+    pub solana_meta: DataReceiver<solana::Meta>,
+    pub config: Arc<InstructionsConfig>,
+}
+
+impl InstructionsBuilder {
+    pub async fn for_project<'a>(
+        &'a self,
+        project: &'a StoredProject,
+    ) -> anyhow::Result<ProjectsOperations> {
+        Ok(ProjectsOperations {
+            solana_pool: &self.solana_pool,
+            project,
+            config: &self.config,
+            rent: self.solana_meta.clone().get().await?.rent,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct ProjectsOperations<'a> {
+    solana_pool: &'a SolanaPool,
+    project: &'a StoredProject,
+    config: &'a InstructionsConfig,
+    rent: Rent,
+}
+
+impl<'a> ProjectsOperations<'a> {
     pub fn create_project(&mut self) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
@@ -54,13 +118,15 @@ impl<'a> InstructionsBuilder<'a> {
         Ok(ix)
     }
 
-    pub fn init_static_pool(&mut self) -> anyhow::Result<Vec<Instruction>> {
+    pub fn init_static_pool(
+        &mut self,
+        static_pool_mint: &Keypair,
+    ) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
         let project_id = project_id(&self.project.id);
         let project_address = project_address(&project_id);
-        let static_pool_mint = Keypair::new();
 
         let pool_address = static_pool_address(static_pool_mint.pubkey());
 
@@ -90,7 +156,7 @@ impl<'a> InstructionsBuilder<'a> {
                         min_purchase_lamports: None,
                         close_conditions: PoolCloseConditions {
                             finish_ts: Some(finish_ts as u64),
-                            max_lamports: Some(SOLS_TO_GRADUATE),
+                            max_lamports: Some(self.config.sols_to_graduate),
                         },
                     },
                 },
@@ -185,7 +251,6 @@ impl<'a> InstructionsBuilder<'a> {
         &mut self,
         action: CurveCreate,
         pumpfun_meta: pumpfun::Meta,
-        token_meta: &StoredTokenMeta,
     ) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(pumpfun_cpi::ID)?;
@@ -216,9 +281,9 @@ impl<'a> InstructionsBuilder<'a> {
                 rent: solana_sdk::sysvar::rent::ID,
             })
             .args(pumpfun_cpi::instruction::Create {
-                _name: token_meta.name.clone(),
-                _symbol: token_meta.symbol.clone(),
-                _uri: action.metadata_uri,
+                _name: action.metadata.name.clone(),
+                _symbol: action.metadata.symbol.clone(),
+                _uri: action.metadata.deployed_url()?,
             })
             .instructions()?;
         result.append(&mut create_ixs);
@@ -317,7 +382,102 @@ impl<'a> InstructionsBuilder<'a> {
                 .instructions()?,
         );
 
+        ix.push(
+            CreateV1Builder::new()
+                .metadata(mpl::metadata_account(action.mint))
+                .mint(action.mint, true)
+                .authority(moonzip::PROGRAM_AUTHORITY)
+                .payer(moonzip::PROGRAM_AUTHORITY)
+                .update_authority(moonzip::PROGRAM_AUTHORITY, true)
+                .is_mutable(false)
+                .primary_sale_happened(false)
+                .name(action.metadata.name.clone())
+                .uri(action.metadata.deployed_url()?)
+                .seller_fee_basis_points(0)
+                .token_standard(mpl_token_metadata::types::TokenStandard::Fungible)
+                .instruction(),
+        );
+
         Ok(ix)
+    }
+
+    pub fn graduate_curve_pool(&self) -> anyhow::Result<Vec<Instruction>> {
+        if matches!(self.project.deploy_schema.curve_pool, CurveVariant::Pumpfun) {
+            bail!("pumpfun curve pools could not be graduated");
+        }
+
+        let client = self.solana_pool.builder();
+        let program = client.program(moonzip::ID)?;
+        let pool_address = self.curve_mint()?;
+
+        let ix = program
+            .request()
+            .accounts(moonzip::accounts::GraduateCurvedPoolAccounts {
+                authority: moonzip::PROGRAM_AUTHORITY,
+                funds_receiver: moonzip::PROGRAM_AUTHORITY,
+                pool: pool_address,
+
+                system_program: solana_sdk::system_program::ID,
+                associated_token_program: anchor_spl::associated_token::ID,
+                token_program: anchor_spl::token::ID,
+            })
+            .instructions()?;
+
+        Ok(ix)
+    }
+
+    pub fn prepare_openbook_market(&self) -> anyhow::Result<(Pubkey, Vec<Instruction>)> {
+        let curve_mint = self.curve_mint()?;
+        let builder = OpenbookInstructionsBuilder {
+            rent: &self.rent,
+            payer: &PROGRAM_AUTHORITY,
+            mint: &curve_mint,
+            program_id: &self.config.serum_openbook_program,
+        };
+        let (market, create_market_ix) = builder.create_market_account()?;
+
+        let (request_queue, request_queue_ix) = builder.create_queue_account("request", 764)?;
+        let (event_queue, event_queue_ix) = builder.create_queue_account("event", 11308)?;
+        let (bids, bids_ix) = builder.create_queue_account("bids", 14524)?;
+        let (asks, asks_ix) = builder.create_queue_account("asks", 14524)?;
+
+        let coin_mint_pk = &WRAPPED_SOL_MINT;
+        let coin_vault_pk = get_associated_token_address(&market, coin_mint_pk);
+
+        let pc_mint_pk = curve_mint;
+        let pc_vault_pk = get_associated_token_address(&market, &pc_mint_pk);
+
+        let initialize_market_ix = initialize_market(
+            &market,
+            &self.config.serum_openbook_program,
+            coin_mint_pk,
+            &pc_mint_pk,
+            &coin_vault_pk,
+            &pc_vault_pk,
+            None,
+            None,
+            None,
+            &bids,
+            &asks,
+            &request_queue,
+            &event_queue,
+            6447184,
+            64,
+            0,
+            64,
+        )?;
+
+        Ok((
+            market,
+            vec![
+                create_market_ix,
+                bids_ix,
+                asks_ix,
+                request_queue_ix,
+                event_queue_ix,
+                initialize_market_ix,
+            ],
+        ))
     }
 
     pub fn lock_project(&self) -> anyhow::Result<Vec<Instruction>> {
@@ -359,13 +519,23 @@ impl<'a> InstructionsBuilder<'a> {
     fn get_project_address(&self) -> Pubkey {
         project_address(&project_id(&self.project.id))
     }
+
+    fn curve_mint(&self) -> anyhow::Result<Pubkey> {
+        Ok(self
+            .project
+            .curve_pool_keypair
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("invariant: no curve mint"))?
+            .to_keypair()
+            .pubkey())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CurveCreate {
     pub mint: Pubkey,
     pub initial_purchase: InitialPurchase,
-    pub metadata_uri: String,
+    pub metadata: StoredTokenMeta,
 }
 
 #[derive(Debug, Clone)]

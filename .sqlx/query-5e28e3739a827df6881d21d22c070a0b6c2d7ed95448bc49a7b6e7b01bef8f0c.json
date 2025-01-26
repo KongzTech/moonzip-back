@@ -1,20 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "query": "SELECT\n                id,\n                owner,\n                deploy_schema AS \"deploy_schema: _\",\n                stage AS \"stage: _\",\n                static_pool_pubkey AS \"static_pool_pubkey?: _\",\n                curve_pool_keypair AS \"curve_pool_keypair?: _\",\n                created_at\n            FROM project WHERE id = $1 FOR UPDATE NOWAIT",
   "describe": {
-    "columns": [],
-    "parameters": {
-      "Left": [
-        "Uuid",
-        {
-          "Custom": {
-            "name": "pubkey",
-            "kind": {
-              "Domain": "Bytea"
-            }
-          }
-        },
-        {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "deploy_schema: _",
+        "type_info": {
           "Custom": {
             "name": "deploy_schema",
             "kind": {
@@ -55,8 +57,12 @@
               ]
             }
           }
-        },
-        {
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "stage: _",
+        "type_info": {
           "Custom": {
             "name": "project_stage",
             "kind": {
@@ -69,27 +75,38 @@
               ]
             }
           }
-        },
-        {
-          "Custom": {
-            "name": "pubkey",
-            "kind": {
-              "Domain": "Bytea"
-            }
-          }
-        },
-        {
-          "Custom": {
-            "name": "keypair",
-            "kind": {
-              "Domain": "Bytea"
-            }
-          }
-        },
-        "Timestamptz"
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "static_pool_pubkey?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "curve_pool_keypair?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
       ]
     },
-    "nullable": []
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
   },
-  "hash": "6cafc048b1a944dc1fe9600e0a6433033abfdaacb66eaacea45a656cceb542f7"
+  "hash": "5e28e3739a827df6881d21d22c070a0b6c2d7ed95448bc49a7b6e7b01bef8f0c"
 }

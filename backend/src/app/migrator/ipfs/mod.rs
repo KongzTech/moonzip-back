@@ -4,16 +4,18 @@ use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use services_common::utils::decode_response_type_or_raw;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IpfsClientConfig {
     pub api_key: String,
+    pub gateway: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct IpfsClient {
     client: reqwest::Client,
+    config: Arc<IpfsClientConfig>,
 }
 
 const PIN_ENDPOINT: &str = "https://api.pinata.cloud/pinning/pinFileToIPFS";
@@ -29,7 +31,10 @@ impl IpfsClient {
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            config: Arc::new(config),
+        })
     }
 
     pub async fn verify_connection(&self) -> anyhow::Result<()> {
@@ -48,7 +53,7 @@ impl IpfsClient {
         Ok(())
     }
 
-    pub async fn pin_image(&self, image_content: Vec<u8>, name: &str) -> anyhow::Result<PinResult> {
+    pub async fn upload_image(&self, image_content: Vec<u8>, name: &str) -> anyhow::Result<String> {
         let form = Form::new()
             .part(
                 "file",
@@ -72,10 +77,11 @@ impl IpfsClient {
             .send()
             .await?;
 
-        decode_response_type_or_raw::<PinResult>(response).await
+        let result = decode_response_type_or_raw::<PinResult>(response).await?;
+        Ok(ipfs_url(&self.config.gateway, &result.ipfs_hash))
     }
 
-    pub async fn pin_json(&self, json: impl Serialize, name: &str) -> anyhow::Result<PinResult> {
+    pub async fn upload_json(&self, json: impl Serialize, name: &str) -> anyhow::Result<String> {
         let json_content = serde_json::to_vec(&json)?;
         let form = Form::new()
             .part(
@@ -100,14 +106,15 @@ impl IpfsClient {
             .send()
             .await?;
 
-        decode_response_type_or_raw::<PinResult>(response).await
+        let result = decode_response_type_or_raw::<PinResult>(response).await?;
+        Ok(ipfs_url(&self.config.gateway, &result.ipfs_hash))
     }
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct PinResult {
+struct PinResult {
     #[serde(rename = "IpfsHash")]
-    pub ipfs_hash: String,
+    ipfs_hash: String,
 }
 
 pub fn ipfs_url(gateway_tag: &str, ipfs_hash: &str) -> String {
@@ -124,14 +131,11 @@ mod tests {
     async fn client() -> IpfsClient {
         let client = IpfsClient::new(IpfsClientConfig {
             api_key: env::var("PINATA_API_KEY").unwrap(),
+            gateway: env::var("PINATA_GATEWAY").unwrap(),
         })
         .unwrap();
         client.verify_connection().await.unwrap();
         client
-    }
-
-    fn gateway() -> String {
-        env::var("PINATA_GATEWAY").unwrap()
     }
 
     #[tokio::test]
@@ -143,9 +147,9 @@ mod tests {
         let client = client().await;
 
         let image_content = std::fs::read(path)?;
-        let result = client.pin_image(image_content.clone(), "moon").await?;
+        let result = client.upload_image(image_content.clone(), "moon").await?;
         println!("{:?}", result);
-        let response = reqwest::get(ipfs_url(&gateway(), &result.ipfs_hash)).await;
+        let response = reqwest::get(result).await;
         assert!(
             response.is_ok(),
             "failed to get image from ipfs: {}",
@@ -160,19 +164,16 @@ mod tests {
     async fn test_pin_json() -> anyhow::Result<()> {
         let client = client().await;
 
-        let json: serde_json::Value =
+        let initial_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string("../tests/data/metadata.json")?)?;
-        let result = client.pin_json(&json, "something").await?;
+        let result = client.upload_json(&initial_json, "something").await?;
         println!("{:?}", result);
 
-        let url = ipfs_url(&gateway(), &result.ipfs_hash);
-        println!("{}", url);
-
         tokio::time::sleep(Duration::from_secs(3)).await;
-        let response = reqwest::get(&url).await?;
+        let response = reqwest::get(result).await?;
 
         let json: serde_json::Value = decode_response_type_or_raw(response).await?;
-        assert_eq!(json["name"], "SOMETHING");
+        assert_eq!(json, initial_json);
 
         Ok(())
     }
