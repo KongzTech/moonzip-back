@@ -12,8 +12,8 @@ import {
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
-import { Pump } from "./external/pumpfun/idl.types";
-import idl from "./external/pumpfun/idl.new.json";
+import { Pump } from "../external/pumpfun/idl.types";
+import idl from "../external/pumpfun/idl.new.json";
 import { BN } from "bn.js";
 import { ASSOCIATED_PROGRAM_ID } from "@coral-xyz/anchor/dist/cjs/utils/token";
 import { airdrop } from "./utils";

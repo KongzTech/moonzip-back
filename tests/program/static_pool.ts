@@ -6,9 +6,10 @@ import {
   getAssociatedTokenAddressSync,
   getMinimumBalanceForRentExemptAccount,
 } from "@solana/spl-token";
-import { Moonzip } from "../target/types/moonzip";
+import { Moonzip } from "../../target/types/moonzip";
 import {
   airdrop,
+  beforeAll,
   createProject,
   getAuthority,
   getProjectAddress,
@@ -16,7 +17,7 @@ import {
   mintToken,
   tokenBalance,
   tokenInit,
-} from "./utils";
+} from "../utils/utils";
 import { BN } from "bn.js";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
@@ -36,6 +37,7 @@ function getPoolAddress(mint: PublicKey) {
 describe("static pool", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
+  before(beforeAll);
 
   const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
   const provider = main_program.provider as anchor.AnchorProvider;
@@ -65,6 +67,8 @@ describe("static pool", () => {
 
     await airdrop(creator.publicKey, new BN(LAMPORTS_PER_SOL));
     await airdrop(authority.publicKey, new BN(LAMPORTS_PER_SOL));
+    console.log("airdropped to authority and creator");
+
     let randomId = new BN(Math.floor(Math.random() * 100000).toString());
     await createProject(creator, randomId, {
       useStaticPool: true,
@@ -73,6 +77,7 @@ describe("static pool", () => {
       },
       devPurchase: null,
     });
+    console.log("project created");
 
     let signature = await main_program.methods
       .createStaticPool({ config: config, projectId: { 0: randomId } })
@@ -84,6 +89,7 @@ describe("static pool", () => {
       .signers([authority, mint])
       .rpc();
     await connection.confirmTransaction(signature);
+    console.log("static pool created");
     let state = await main_program.account.staticPool.fetch(
       getPoolAddress(mint.publicKey)
     );
@@ -122,7 +128,7 @@ describe("static pool", () => {
       .signers([authority, firstBuyer])
       .rpc();
     await connection.confirmTransaction(signature);
-
+    console.log("first buyer bought");
     state = await main_program.account.staticPool.fetch(
       getPoolAddress(mint.publicKey)
     );
@@ -147,7 +153,7 @@ describe("static pool", () => {
       .signers([authority, secondBuyer])
       .rpc();
     await connection.confirmTransaction(signature);
-
+    console.log("second buyer bought");
     state = await main_program.account.staticPool.fetch(poolAddress);
 
     expect(state.collectedLamports.toNumber()).to.eql(
@@ -168,11 +174,12 @@ describe("static pool", () => {
         authority: authority.publicKey,
         fundsReceiver: fundsReceiver.publicKey,
         pool: poolAddress,
+        project: getProjectAddress(randomId),
       })
       .signers([authority])
       .rpc();
     await connection.confirmTransaction(signature);
-
+    console.log("static pool graduated");
     expect(
       main_program.account.staticPool.fetch(poolAddress)
     ).to.eventually.be.rejectedWith("shit");

@@ -1,15 +1,18 @@
 import { Program } from "@coral-xyz/anchor";
 import {
   airdrop,
+  beforeAll,
   createProject,
+  feeAddress,
   getAuthority as getAuthority,
   getProjectAddress,
   mintToken,
-  takeFee,
+  MZIP_FEE,
+  feeAmount,
   tokenBalance,
   tokenInit,
-} from "./utils";
-import { Moonzip } from "../target/types/moonzip";
+} from "../utils/utils";
+import { Moonzip } from "../../target/types/moonzip";
 import * as anchor from "@coral-xyz/anchor";
 import { createCurvedPool } from "./curved_pool";
 import { BN } from "bn.js";
@@ -28,7 +31,7 @@ import {
   initPumpfunCurve,
   PUMPFUN_FEE,
   sellFromPumpfun,
-} from "./pumpfun";
+} from "../utils/pumpfun";
 chai.use(chaiAsPromised);
 
 function getTransmuterAddress(fromMint: PublicKey, toMint: PublicKey) {
@@ -47,6 +50,7 @@ function getTransmuterAddress(fromMint: PublicKey, toMint: PublicKey) {
 describe("transmuter", () => {
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
+  before(beforeAll);
 
   const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
   const provider = main_program.provider as anchor.AnchorProvider;
@@ -156,6 +160,7 @@ describe("transmuter", () => {
     expect(userToBalance).to.gt(0);
 
     const preSellBalance = await connection.getBalance(user.publicKey);
+    let feeBalance = await connection.getBalance(feeAddress());
     signature = await main_program.methods
       .sellFromCurvedPool({
         tokens: new BN(userToBalance),
@@ -174,7 +179,13 @@ describe("transmuter", () => {
     console.log("sold from curved pool for user ", user.publicKey.toBase58());
     const postSellBalance = await connection.getBalance(user.publicKey);
     const addedSols = postSellBalance - preSellBalance;
-    expect(addedSols).to.eql(userFromBalance.toNumber());
+    expect(addedSols).to.eql(
+      userFromBalance.toNumber() -
+        feeAmount(userFromBalance, MZIP_FEE).toNumber()
+    );
+
+    let addedFee = (await connection.getBalance(feeAddress())) - feeBalance;
+    expect(addedFee).to.eql(feeAmount(userFromBalance, MZIP_FEE).toNumber());
   });
 
   it("happy path for pumpfun bonding curve", async () => {
@@ -268,6 +279,8 @@ describe("transmuter", () => {
     console.log("sold from bonding curve for user ", user.publicKey.toBase58());
     const postSellBalance = await connection.getBalance(user.publicKey);
     const addedSols = postSellBalance - preSellBalance;
-    expect(addedSols).to.eql(takeFee(userFromBalance, PUMPFUN_FEE).toNumber());
+    expect(addedSols).to.eql(
+      userFromBalance.sub(feeAmount(userFromBalance, PUMPFUN_FEE)).toNumber()
+    );
   });
 });

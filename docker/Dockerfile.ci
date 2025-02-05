@@ -1,5 +1,46 @@
-FROM backpackapp/build:v0.30.1
+FROM backpackapp/build:v0.30.1 AS base
 
-RUN export DEBIAN_FRONTEND=noninteractive && apt install -y make
+ARG NODE_VERSION="v20.16.0"
+ENV PATH="${HOME}/.nvm/versions/node/${NODE_VERSION}/bin:${PATH}"
+
+RUN export DEBIAN_FRONTEND=noninteractive && \
+    apt install -y make netcat && \
+    /bin/bash -c "source ~/.nvm/nvm.sh && nvm install ${NODE_VERSION} && nvm use ${NODE_VERSION} && nvm alias default node && corepack enable"
+
 RUN rustup default 1.81.0 && rustup component add rustfmt clippy && \
     cargo install sqlx-cli --no-default-features --features native-tls,postgres
+
+ENV PATH=/app/target/release:/app/target/debug:$PATH
+
+# dev image to run environment for e2e tests and CI in general
+FROM base AS dev
+
+ARG MOONZIP_AUTHORITY
+ENV MOONZIP_AUTHORITY=$MOONZIP_AUTHORITY
+
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    --mount=type=cache,target=/root/app/node_modules \
+    make build && make build-program && yarn install && \
+    cp ./target/debug/api_server /usr/local/bin/api_server && \
+    cp ./target/debug/migrator /usr/local/bin/migrator && \
+    cp ./target/deploy/moonzip.so . && cp -r ./target/idl . && \
+    solana-keygen new --no-passphrase
+
+# build release version of apps
+FROM base AS build-release
+
+ARG MOONZIP_AUTHORITY
+ENV MOONZIP_AUTHORITY=$MOONZIP_AUTHORITY
+
+WORKDIR /app
+COPY . .
+RUN make build-release
+
+# prod-ready image to run on the end-nodes.
+FROM build-release AS prod
+
+WORKDIR /app
+COPY --from=build-release /app/target/release /app/target/release

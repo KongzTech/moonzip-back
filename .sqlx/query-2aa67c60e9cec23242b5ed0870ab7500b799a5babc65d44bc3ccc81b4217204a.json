@@ -22,8 +22,20 @@
             "kind": {
               "Composite": [
                 [
-                  "use_static_pool",
-                  "Bool"
+                  "static_pool",
+                  {
+                    "Custom": {
+                      "name": "static_pool_config",
+                      "kind": {
+                        "Composite": [
+                          [
+                            "launch_ts",
+                            "Int8"
+                          ]
+                        ]
+                      }
+                    }
+                  }
                 ],
                 [
                   "curve_pool",
@@ -38,10 +50,6 @@
                       }
                     }
                   }
-                ],
-                [
-                  "launch_after",
-                  "Interval"
                 ],
                 [
                   "dev_purchase",
@@ -68,8 +76,10 @@
             "kind": {
               "Enum": [
                 "Created",
+                "Confirmed",
                 "OnStaticPool",
-                "StaticPoolClosedOnCurvePool",
+                "StaticPoolClosed",
+                "OnCurvePool",
                 "CurvePoolClosed",
                 "Graduated"
               ]
@@ -101,8 +111,10 @@
             "kind": {
               "Enum": [
                 "Created",
+                "Confirmed",
                 "OnStaticPool",
-                "StaticPoolClosedOnCurvePool",
+                "StaticPoolClosed",
+                "OnCurvePool",
                 "CurvePoolClosed",
                 "Graduated"
               ]

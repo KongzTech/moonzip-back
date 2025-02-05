@@ -4,16 +4,20 @@ use super::{
         TransmuterInitArgs,
     },
     storage::{
-        project::{self, project_id, CurveVariant, ProjectId, StoredTokenImage, StoredTokenMeta},
-        DBTransaction, StorageClient,
+        project::{self, project_id, CurveVariant, ImageStream, ProjectId, StoredTokenMeta},
+        DBTransaction, StorageClient, DB,
     },
 };
 use crate::solana::SolanaKeys;
 use anchor_client::anchor_lang::AccountDeserialize;
-use anyhow::bail;
+use anyhow::{bail, Context as _};
 use chrono::DateTime;
 use derive_more::derive::Deref;
-use moonzip::{moonzip::StaticPool, project::project_address, PROGRAM_AUTHORITY};
+use moonzip::{
+    moonzip::{static_pool_address, StaticPool},
+    project::project_address,
+    PROGRAM_AUTHORITY,
+};
 use serde::{Deserialize, Serialize};
 use services_common::{
     solana::{jito, pool::SolanaPool},
@@ -22,10 +26,14 @@ use services_common::{
 };
 use solana_client::rpc_config::RpcAccountInfoConfig;
 use solana_sdk::{commitment_config::CommitmentConfig, signer::Signer};
-use sqlx::{query, query_as};
-use std::{ops::DerefMut, sync::Arc, time::Duration};
-use tokio::spawn;
-use tracing::{error, instrument, warn};
+use sqlx::{query, query_as, Executor};
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+    time::Duration,
+};
+use tokio::{spawn, task::JoinHandle};
+use tracing::{debug, error, instrument, warn};
 use txs::{TransactionRequest, TxExecutor, TxExecutorConfig};
 
 const DEV_WEBSITE: &str = "https://moon.zip";
@@ -37,7 +45,8 @@ pub mod txs;
 pub struct MigratorConfig {
     #[serde(with = "humantime_serde", default = "default_tick_interval")]
     pub tick_interval: Duration,
-    pub ipfs: ipfs::IpfsClientConfig,
+    pub mzip_ipfs: ipfs::moonzip::IpfsClientConfig,
+    pub pumpfun_ipfs: ipfs::pumpfun::PumpfunIpfsClientConfig,
     pub tx_exec: TxExecutorConfig,
 }
 
@@ -60,7 +69,7 @@ impl Migrator {
         storage: StorageClient,
         instructions_builder: InstructionsBuilder,
         config: MigratorConfig,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<JoinHandle<()>> {
         let pumpfun_meta_rx = PeriodicFetcher::new(
             pumpfun::MetaFetcher {
                 pool: solana_pool.clone(),
@@ -81,8 +90,10 @@ impl Migrator {
         )
         .serve();
 
-        let ipfs = ipfs::IpfsClient::new(config.ipfs)?;
-        ipfs.verify_connection().await?;
+        let mzip_ipfs = ipfs::moonzip::IpfsClient::new(config.mzip_ipfs)?;
+        mzip_ipfs.verify_connection().await?;
+
+        let pumpfun_ipfs = ipfs::pumpfun::PumpfunIpfsClient::new(config.pumpfun_ipfs);
 
         let tools = Tools {
             internal: Arc::new(ToolsInternal {
@@ -91,7 +102,8 @@ impl Migrator {
                 pumpfun_meta_rx: pumpfun_meta_rx.clone(),
                 moonzip_meta_rx: moonzip_meta_rx.clone(),
                 jito_meta_rx: jito_meta_rx.clone(),
-                ipfs,
+                mzip_ipfs,
+                pumpfun_ipfs,
                 tx_executor: TxExecutor::new(
                     solana_pool.clone(),
                     solana_meta.clone(),
@@ -104,7 +116,7 @@ impl Migrator {
 
         let migrator = Migrator { tools };
 
-        tokio::spawn(async move {
+        Ok(tokio::spawn(async move {
             loop {
                 if let Err(err) = migrator.tick().await {
                     error!("migration tick failed: {err:#}");
@@ -112,8 +124,7 @@ impl Migrator {
 
                 tokio::time::sleep(config.tick_interval).await;
             }
-        });
-        Ok(())
+        }))
     }
 
     async fn tick(&self) -> anyhow::Result<()> {
@@ -171,18 +182,26 @@ impl Migrator {
                 let account = account?;
                 Some((project, account))
             });
-        for (project, account) in iter {
+        for (mut project, account) in iter {
             let project_data = moonzip::project::Project::try_deserialize(&mut &account.data[..])?;
-            let diff = Diff {
-                stored: project,
-                received: project_data,
-            };
-            let executor = DiffExecutor {
+            let has_changed = project.apply_from_chain(project_data);
+            if has_changed {
+                set_project_stage(self.tools.storage.deref(), project.id, project.stage).await?;
+            }
+            if !migrator_target(&project) {
+                debug!(
+                    "skipping project({:?}) migration - not a target",
+                    project.id
+                );
+                continue;
+            }
+
+            let executor = ProjectMigrationExecutor {
                 tools: self.tools.clone(),
-                diff,
+                project,
             };
             spawn(async move {
-                let id = executor.diff.stored.id;
+                let id = executor.project.id;
                 if let Err(err) = executor.migrate().await {
                     warn!("failed to execute migration for project({:?}): {err:#}", id);
                 }
@@ -197,94 +216,89 @@ impl Migrator {
     }
 }
 
-struct DiffExecutor {
-    tools: Tools,
-    diff: Diff,
+fn migrator_target(project: &project::StoredProject) -> bool {
+    matches!(
+        project.stage,
+        project::Stage::Confirmed
+            | project::Stage::OnStaticPool
+            | project::Stage::StaticPoolClosed
+            | project::Stage::CurvePoolClosed
+    )
 }
 
-impl DiffExecutor {
-    #[instrument(skip(self), fields(project_id = %self.diff.stored.id))]
+struct ProjectMigrationExecutor {
+    tools: Tools,
+    project: project::StoredProject,
+}
+
+impl ProjectMigrationExecutor {
+    #[instrument(skip(self), fields(project_id = %self.project.id))]
     async fn migrate(self) -> anyhow::Result<()> {
-        match (&self.diff.stored.stage, &self.diff.received.stage) {
+        match self.project.stage {
             // project is created with graduation straight to curve pool
-            (project::Stage::Created, moonzip::project::ProjectStage::Created) => {
-                if self.diff.stored.deploy_schema.use_static_pool {
+            project::Stage::Confirmed => {
+                if self.project.deploy_schema.static_pool.is_some() {
                     bail!("invariant: project must have begun straight to static pool");
                 }
-                let prepare_curve_deploy = PrepareCurveDeploy {
-                    tools: self.tools.clone(),
-                    lock: self
-                        .tools
-                        .lock_project_with_stage(&self.diff.stored.id, |stage| {
-                            stage == project::Stage::Created
-                        })
-                        .await?,
-                };
-                prepare_curve_deploy.prepare().await?;
-
-                let mut second_lock = self
-                    .tools
-                    .lock_project_with_stage(&self.diff.stored.id, |stage| {
-                        stage == project::Stage::Created
-                    })
+                self.deploy_curve(ChainHelper::new(&self.tools.solana_pool, &self.project))
                     .await?;
-                let mut deployer = Deployer::new(self.tools.clone(), &mut second_lock);
-                deployer.init_curve_pool().await?;
             }
             // we need to migrate static pool to curve pool
-            (_, moonzip::project::ProjectStage::StaticPoolClosed) => {
-                let mut lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                lock.sync_stage(project::Stage::StaticPoolClosed).await?;
-
-                let prepare_curve_deploy = PrepareCurveDeploy {
-                    tools: self.tools.clone(),
-                    lock,
-                };
-                prepare_curve_deploy.prepare().await?;
-
-                let mut second_lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                let mut deployer = Deployer::new(self.tools.clone(), &mut second_lock);
-                deployer.init_curve_pool().await?;
+            project::Stage::StaticPoolClosed => {
+                self.deploy_curve(ChainHelper::new(&self.tools.solana_pool, &self.project))
+                    .await?;
             }
-            (_, moonzip::project::ProjectStage::StaticPoolActive) => {
-                let mut lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                if lock.project.stage != project::Stage::OnStaticPool {
-                    lock.sync_stage(project::Stage::OnStaticPool).await?;
-                    lock.commit().await?;
-                    lock = self.tools.lock_project(&self.diff.stored.id).await?;
+            project::Stage::OnStaticPool => {
+                let mut chain_helper = ChainHelper::new(&self.tools.solana_pool, &self.project);
+                if chain_helper.should_close_static_pool().await? {
+                    self.deploy_curve(chain_helper).await?;
                 }
-                {
-                    let mut deployer = Deployer::new(self.tools.clone(), &mut lock);
-                    if deployer.should_close_static_pool().await? {
-                        deployer.init_curve_pool().await?;
-                    }
-                }
-                lock.commit().await?;
             }
-            (_, moonzip::project::ProjectStage::CurvePoolClosed) => {
-                let mut lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                lock.sync_stage(project::Stage::CurvePoolClosed).await?;
-                let deployer = Deployer::new(self.tools.clone(), &mut lock);
+            project::Stage::CurvePoolClosed => {
+                let mut lock = self
+                    .tools
+                    .lock_project_with_stage(&self.project.id, |stage| {
+                        stage == project::Stage::CurvePoolClosed
+                    })
+                    .await?;
+                let chain_helper = ChainHelper::new(&self.tools.solana_pool, &self.project);
+                let deployer = Deployer::new(self.tools.clone(), &mut lock, chain_helper);
                 deployer.graduate_to_raydium().await?;
             }
-            (_, moonzip::project::ProjectStage::CurvePoolActive) => {
-                let mut lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                lock.sync_stage(project::Stage::OnCurvePool).await?;
-                lock.commit().await?;
-            }
-            (_, moonzip::project::ProjectStage::Graduated) => {
-                let mut lock = self.tools.lock_project(&self.diff.stored.id).await?;
-                lock.sync_stage(project::Stage::Graduated).await?;
-                lock.commit().await?;
-            }
             _ => {
-                bail!(
-                    "unexpected project migration: {:?} -> {:?}",
-                    self.diff.stored.stage,
-                    self.diff.received.stage
-                );
+                bail!("invariant: other stage must not propagate to the migrator");
             }
         }
+        Ok(())
+    }
+
+    async fn deploy_curve<'a>(&self, chain_helper: ChainHelper<'a>) -> anyhow::Result<()> {
+        let verify_stage = |stage: project::Stage| {
+            stage == project::Stage::StaticPoolClosed
+                || stage == project::Stage::Confirmed
+                || stage == project::Stage::OnStaticPool
+        };
+
+        let mut lock = self
+            .tools
+            .lock_project_with_stage(&self.project.id, verify_stage)
+            .await?;
+
+        // Assign keypair and deploy project metadata if needed
+        if lock.project.curve_pool_mint().is_none() {
+            let prepare_curve_deploy = PrepareCurveDeploy {
+                tools: self.tools.clone(),
+                lock,
+            };
+            prepare_curve_deploy.prepare().await?;
+            lock = self
+                .tools
+                .lock_project_with_stage(&self.project.id, verify_stage)
+                .await?;
+        }
+
+        let mut deployer = Deployer::new(self.tools.clone(), &mut lock, chain_helper);
+        deployer.init_curve_pool().await?;
         Ok(())
     }
 }
@@ -292,15 +306,15 @@ impl DiffExecutor {
 struct Deployer<'a, 'b> {
     tools: Tools,
     lock: &'a mut ProjectLock<'b>,
-    fetched_static_pool: Option<StaticPool>,
+    chain_helper: ChainHelper<'a>,
 }
 
 impl<'a, 'b> Deployer<'a, 'b> {
-    fn new(tools: Tools, lock: &'a mut ProjectLock<'b>) -> Self {
+    fn new(tools: Tools, lock: &'a mut ProjectLock<'b>, chain_helper: ChainHelper<'a>) -> Self {
         Self {
             tools,
             lock,
-            fetched_static_pool: None,
+            chain_helper,
         }
     }
 
@@ -316,18 +330,17 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .transpose()?
             .unwrap_or(0u64);
 
-        if self.lock.project.deploy_schema.use_static_pool {
-            initial_purchase += self.static_pool().await?.collected_lamports;
+        if self.lock.project.deploy_schema.static_pool.is_some() {
+            initial_purchase += self.chain_helper.static_pool().await?.collected_lamports;
         }
 
         let mut ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.lock.project)
-            .await?;
+            .for_project(&self.lock.project)?;
         let mut ixs = ix_builder.lock_project()?;
 
-        if self.lock.project.deploy_schema.use_static_pool {
+        if self.lock.project.deploy_schema.static_pool.is_some() {
             ixs.append(&mut ix_builder.graduate_static_pool()?);
         }
 
@@ -352,44 +365,46 @@ impl<'a, 'b> Deployer<'a, 'b> {
 
         match self.lock.project.deploy_schema.curve_pool {
             CurveVariant::Moonzip => {
-                let moonzip_meta = self.tools.moonzip_meta_rx.clone().get().await?;
+                let moonzip_meta = self.tools.moonzip_meta_rx.clone().get()?;
                 ixs.append(&mut ix_builder.init_moonzip_pool(curve_create, &moonzip_meta)?);
             }
             CurveVariant::Pumpfun => {
-                let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get().await?;
+                let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get()?;
                 ixs.append(&mut ix_builder.init_pumpfun_pool(curve_create, pumpfun_meta)?);
             }
         };
 
-        if self.lock.project.deploy_schema.use_static_pool {
+        if self.lock.project.deploy_schema.static_pool.is_some() {
             let static_pool_mint = self.lock.project.static_pool_mint().ok_or_else(|| {
                 anyhow::anyhow!("invariant: static pool mint is not already stored")
             })?;
-            match self.lock.project.deploy_schema.curve_pool {
+            ixs.append(&mut match self.lock.project.deploy_schema.curve_pool {
                 CurveVariant::Moonzip => {
                     ix_builder.add_transmuter_for_moonzip(TransmuterInitArgs {
                         from_mint: static_pool_mint,
                         to_mint: keypair.pubkey(),
                         donor: PROGRAM_AUTHORITY,
-                    })?;
+                    })?
                 }
                 CurveVariant::Pumpfun => {
                     ix_builder.add_transmuter_for_pumpfun(TransmuterInitArgs {
                         from_mint: static_pool_mint,
                         to_mint: keypair.pubkey(),
                         donor: PROGRAM_AUTHORITY,
-                    })?;
+                    })?
                 }
-            }
+            })
         };
 
         ixs.append(&mut ix_builder.unlock_project()?);
-
         self.tools
             .tx_executor
             .execute_single(TransactionRequest {
                 instructions: ixs,
-                signers: vec![self.tools.solana_keys.authority_keypair().to_keypair()],
+                signers: vec![
+                    self.tools.solana_keys.authority_keypair().to_keypair(),
+                    keypair,
+                ],
                 payer: self.tools.solana_keys.authority_keypair().to_keypair(),
             })
             .await?;
@@ -397,34 +412,23 @@ impl<'a, 'b> Deployer<'a, 'b> {
         Ok(())
     }
 
-    async fn should_close_static_pool(&mut self) -> anyhow::Result<bool> {
-        let pool = self.static_pool().await?;
-
-        Ok(pool
-            .config
-            .close_conditions
-            .should_be_closed(pool.collected_lamports, TZ::now().timestamp() as u64))
-    }
-
     async fn graduate_to_raydium(&self) -> anyhow::Result<()> {
         let ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.lock.project)
-            .await?;
+            .for_project(&self.lock.project)?;
         let mut first_tx = ix_builder.graduate_curve_pool()?;
         let (openbook_market, mut openbook_market_ix) = ix_builder.prepare_openbook_market()?;
         first_tx.append(&mut openbook_market_ix);
 
-        let jito_meta = self.tools.jito_meta_rx.clone().get().await?;
+        let jito_meta = self.tools.jito_meta_rx.clone().get()?;
         first_tx.push(jito_meta.tip_ix(&PROGRAM_AUTHORITY));
 
         let curve_config = self
             .tools
             .moonzip_meta_rx
             .clone()
-            .get()
-            .await?
+            .get()?
             .global_account
             .config
             .curve;
@@ -457,6 +461,31 @@ impl<'a, 'b> Deployer<'a, 'b> {
 
         Ok(())
     }
+}
+
+struct ChainHelper<'a> {
+    pool: &'a SolanaPool,
+    fetched_static_pool: Option<StaticPool>,
+    project: &'a project::StoredProject,
+}
+
+impl<'a> ChainHelper<'a> {
+    fn new(pool: &'a SolanaPool, project: &'a project::StoredProject) -> Self {
+        Self {
+            pool,
+            fetched_static_pool: None,
+            project,
+        }
+    }
+
+    async fn should_close_static_pool(&mut self) -> anyhow::Result<bool> {
+        let pool = self.static_pool().await?;
+
+        Ok(pool
+            .config
+            .close_conditions
+            .should_be_closed(pool.collected_lamports, TZ::now().timestamp() as u64))
+    }
 
     async fn static_pool(&mut self) -> anyhow::Result<&StaticPool> {
         {
@@ -465,17 +494,20 @@ impl<'a, 'b> Deployer<'a, 'b> {
                 return Ok(self.fetched_static_pool.as_ref().unwrap());
             }
         }
+        let mint = self
+            .project
+            .static_pool_mint()
+            .ok_or_else(|| anyhow::anyhow!("invariant: static pool mint is not already stored"))?;
 
+        let address = static_pool_address(mint);
         let pool = self
-            .tools
-            .solana_pool
+            .pool
             .rpc_client()
             .use_single()
             .await
-            .get_account_data(&self.lock.project.static_pool_mint().ok_or_else(|| {
-                anyhow::anyhow!("invariant: static pool mint is not already stored")
-            })?)
-            .await?;
+            .get_account_data(&address)
+            .await
+            .context("fetch static pool")?;
         let pool = StaticPool::try_deserialize(&mut &pool[..])?;
         self.fetched_static_pool = Some(pool);
         Ok(self.fetched_static_pool.as_ref().unwrap())
@@ -495,85 +527,69 @@ impl<'a> PrepareCurveDeploy<'a> {
         )
         .execute(&mut *self.lock.tx)
         .await?;
-
-        let mut manager = MetadataManager {
-            tools: self.tools.clone(),
-            project_id: self.lock.project.id,
-            tx: &mut self.lock.tx,
-        };
-
-        manager
-            .deploy_metadata(self.lock.project.deploy_schema.curve_pool)
+        self.deploy_metadata(self.lock.project.deploy_schema.curve_pool)
             .await?;
-
         self.lock.commit().await?;
 
         Ok(())
     }
-}
 
-struct MetadataManager<'a, 'b> {
-    tools: Tools,
-    project_id: ProjectId,
-    tx: &'a mut DBTransaction<'b>,
-}
-
-impl<'a, 'b> MetadataManager<'a, 'b> {
     async fn deploy_metadata(&mut self, curve_variant: CurveVariant) -> anyhow::Result<String> {
-        let meta = token_meta(self.tx, self.project_id).await?;
+        let meta = token_meta(&mut self.lock.tx, self.lock.project.id).await?;
         if let Some(deployed_url) = meta.deployed_url {
             return Ok(deployed_url);
         }
 
-        let image = token_image(self.tx, self.project_id).await?;
+        let metadata_uri = {
+            let image = token_image(&mut self.lock.tx, self.lock.project.id).await?;
 
-        let metadata_uri = match curve_variant {
-            CurveVariant::Moonzip => self.deploy_moonzip_metadata(meta, image).await?,
-            CurveVariant::Pumpfun => self.deploy_pumpfun_metadata(meta, image).await?,
+            match curve_variant {
+                CurveVariant::Moonzip => {
+                    Self::deploy_moonzip_metadata(&self.tools.mzip_ipfs, meta, image).await?
+                }
+                CurveVariant::Pumpfun => {
+                    Self::deploy_pumpfun_metadata(&self.tools.pumpfun_ipfs, meta, image).await?
+                }
+            }
         };
 
         sqlx::query!(
             "UPDATE token_meta SET deployed_url = $1 WHERE project_id = $2",
             metadata_uri,
-            self.project_id as _,
+            self.lock.project.id as _,
         )
-        .execute(self.tx.deref_mut())
+        .execute(self.lock.tx.deref_mut())
         .await?;
 
         Ok(metadata_uri)
     }
 
     async fn deploy_pumpfun_metadata(
-        &mut self,
+        ipfs: &ipfs::pumpfun::PumpfunIpfsClient,
         meta: StoredTokenMeta,
-        image: StoredTokenImage,
+        image: ImageStream<'_>,
     ) -> anyhow::Result<String> {
-        let client = pumpfun::HttpClient::new();
-        let metadata = pumpfun::CreateTokenMetadata {
+        let metadata = ipfs::pumpfun::CreateTokenMetadata {
             name: meta.name,
             symbol: meta.symbol,
             description: meta.description,
-            image_content: image.image_content,
+            image_content: image,
             telegram: meta.telegram,
             website: meta.website,
             twitter: meta.twitter,
         };
 
-        let response = client.deploy_metadata(metadata).await?;
+        let response = ipfs.deploy_metadata(metadata).await?;
 
         Ok(response.metadata_uri)
     }
 
     async fn deploy_moonzip_metadata(
-        &mut self,
+        ipfs: &ipfs::moonzip::IpfsClient,
         meta: StoredTokenMeta,
-        image: StoredTokenImage,
+        image: ImageStream<'_>,
     ) -> anyhow::Result<String> {
-        let image_url = self
-            .tools
-            .ipfs
-            .upload_image(image.image_content, &meta.name)
-            .await?;
+        let image_url = ipfs.upload_image(image, &meta.name).await?;
         let token_name = meta.name.clone();
 
         let metadata = OffchainMetadata {
@@ -588,7 +604,7 @@ impl<'a, 'b> MetadataManager<'a, 'b> {
             twitter: meta.twitter,
         };
 
-        let meta_url = self.tools.ipfs.upload_json(&metadata, &token_name).await?;
+        let meta_url = ipfs.upload_json(&metadata, &token_name).await?;
         Ok(meta_url)
     }
 }
@@ -607,7 +623,8 @@ struct ToolsInternal {
     moonzip_meta_rx: DataReceiver<mzip::Meta>,
     jito_meta_rx: DataReceiver<jito::TipState>,
 
-    ipfs: ipfs::IpfsClient,
+    mzip_ipfs: ipfs::moonzip::IpfsClient,
+    pumpfun_ipfs: ipfs::pumpfun::PumpfunIpfsClient,
     tx_executor: TxExecutor,
     instructions_builder: InstructionsBuilder,
 }
@@ -656,8 +673,8 @@ struct ProjectLock<'a> {
     project: project::StoredProject,
 }
 
-async fn set_project_stage(
-    tx: &mut DBTransaction<'_>,
+async fn set_project_stage<'a, 'c, E: Executor<'c, Database = DB> + 'a>(
+    executor: E,
     project_id: ProjectId,
     stage: project::Stage,
 ) -> anyhow::Result<()> {
@@ -666,18 +683,12 @@ async fn set_project_stage(
         stage as _,
         project_id as _,
     )
-    .execute(tx.deref_mut())
+    .execute(executor)
     .await?;
     Ok(())
 }
 
 impl<'a> ProjectLock<'a> {
-    async fn sync_stage(&mut self, stage: project::Stage) -> anyhow::Result<()> {
-        set_project_stage(&mut self.tx, self.project.id, stage).await?;
-        self.project.stage = stage;
-        Ok(())
-    }
-
     async fn commit(self) -> anyhow::Result<()> {
         self.tx.commit().await?;
         Ok(())
@@ -699,25 +710,16 @@ async fn token_meta(
     Ok(metadata)
 }
 
-async fn token_image(
-    tx: &mut DBTransaction<'_>,
+async fn token_image<'a, 'b>(
+    tx: &'a mut DBTransaction<'b>,
     project_id: ProjectId,
-) -> anyhow::Result<StoredTokenImage> {
-    let image = query_as!(
-        StoredTokenImage,
-        "SELECT * FROM token_image WHERE project_id = $1",
-        project_id as _,
-    )
-    .fetch_one(tx.deref_mut())
-    .await?;
-
-    Ok(image)
-}
-
-#[derive(Debug, Clone)]
-struct Diff {
-    stored: project::StoredProject,
-    received: moonzip::project::Project,
+) -> anyhow::Result<ImageStream<'a>> {
+    let query = format!(
+        "COPY (SELECT image_content FROM token_image WHERE project_id = '{}') TO STDOUT WITH (FORMAT binary)",
+        project_id
+    );
+    let copy_out = tx.copy_out_raw(&query).await?;
+    Ok(ImageStream(copy_out))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

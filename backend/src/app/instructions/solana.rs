@@ -10,6 +10,19 @@ impl MetaFetcher {
     pub fn new(pool: SolanaPool) -> Self {
         Self { pool, rent: None }
     }
+
+    async fn fetch_rent_if_needed(&mut self) -> anyhow::Result<()> {
+        if self.rent.is_some() {
+            return Ok(());
+        }
+
+        let client = self.pool.rpc_client().use_single().await;
+        let rent_account = client.get_account(&solana_sdk::sysvar::rent::ID).await?;
+        let data: Rent = rent_account.deserialize_data()?;
+        self.rent = Some(data);
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -19,16 +32,11 @@ impl FetchExecutor<Meta> for MetaFetcher {
     }
 
     async fn init(&mut self) -> anyhow::Result<()> {
-        let client = self.pool.rpc_client().use_single().await;
-        let rent_account = client.get_account(&solana_sdk::sysvar::rent::ID).await?;
-
-        let data: Rent = rent_account.deserialize_data()?;
-        self.rent = Some(data);
-
         Ok(())
     }
 
     async fn fetch(&mut self) -> anyhow::Result<Meta> {
+        self.fetch_rent_if_needed().await?;
         let (blockhash, marker) = self
             .pool
             .rpc_client()

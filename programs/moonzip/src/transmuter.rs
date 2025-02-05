@@ -1,6 +1,8 @@
 use crate::{
     curved_pool::{curve::CurveState, CurvedPool, CURVED_POOL_PREFIX},
     ensure_account_size,
+    moonzip::curve::CalcSell as _,
+    program::Moonzip,
     pumpfun::{self, seeds::BONDING_CURVE_SEED, CurveWrapper},
     utils::Sizable,
     PROGRAM_AUTHORITY,
@@ -137,6 +139,51 @@ pub fn transmute(ctx: Context<TransmuteAccounts>, data: TransmuteData) -> Result
     Ok(())
 }
 
+/// It will transmute all available user tokens(if any)
+pub fn transmute_idempotent(ctx: Context<TransmuteIdempotentAccounts>) -> Result<()> {
+    if ctx.accounts.transmuter.data_is_empty() {
+        msg!("transmuter is already finished");
+        return Ok(());
+    }
+
+    if ctx.accounts.user_from_token_account.data_is_empty() {
+        msg!("user from token account is empty");
+        return Ok(());
+    }
+
+    let mint = anchor_spl::token::TokenAccount::try_deserialize(
+        &mut ctx.accounts.from_mint.data.borrow().as_ref(),
+    )
+    .expect("from mint token account of user is invalid");
+
+    let tokens = mint.amount;
+
+    crate::cpi::transmute(
+        CpiContext::new(
+            ctx.accounts.moonzip_program.to_account_info(),
+            crate::cpi::accounts::TransmuteAccounts {
+                authority: ctx.accounts.authority.to_account_info(),
+                user: ctx.accounts.user.to_account_info(),
+                from_mint: ctx.accounts.from_mint.to_account_info(),
+                to_mint: ctx.accounts.to_mint.to_account_info(),
+                user_from_token_account: ctx.accounts.user_from_token_account.to_account_info(),
+                user_to_token_account: ctx.accounts.user_to_token_account.to_account_info(),
+                transmuter_to_token_account: ctx
+                    .accounts
+                    .transmuter_to_token_account
+                    .to_account_info(),
+                transmuter: ctx.accounts.transmuter.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+                token_program: ctx.accounts.token_program.to_account_info(),
+                associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+            },
+        ),
+        TransmuteData { tokens },
+    )?;
+
+    Ok(())
+}
+
 trait TransmuterInitAccounts<'info>: Bumps {
     fn base(&mut self) -> &mut BaseInitTransmuterAccounts<'info>;
     fn transmuter_bump(&self, bumps: &<Self as Bumps>::Bumps) -> u8;
@@ -268,6 +315,37 @@ pub struct TransmuteAccounts<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+}
+
+#[derive(Accounts)]
+pub struct TransmuteIdempotentAccounts<'info> {
+    #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
+    pub authority: Signer<'info>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    /// CHECK: we don't check accounts because they would be further checked by CPI call
+    #[account(mut)]
+    pub from_mint: UncheckedAccount<'info>,
+    /// CHECK: same
+    pub to_mint: UncheckedAccount<'info>,
+
+    /// CHECK: same
+    pub user_from_token_account: UncheckedAccount<'info>,
+    /// CHECK: same
+    pub user_to_token_account: UncheckedAccount<'info>,
+
+    /// CHECK: same
+    pub transmuter_to_token_account: UncheckedAccount<'info>,
+
+    /// CHECK: same
+    pub transmuter: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub moonzip_program: Program<'info, Moonzip>,
 }
 
 #[account]

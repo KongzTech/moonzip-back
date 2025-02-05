@@ -24,14 +24,6 @@ pub fn assert_type_equal<T: Sizable + AccountSerialize>(size: usize) {
     )
 }
 
-pub fn deduct_fee(amount: u64, fee_bp: u32) -> (u64, u64) {
-    // Calculate the fee amount in the same units
-    let fee = (amount * (fee_bp as u64)) / 10000;
-
-    // Return the net amount after deducting the fee, converting back to u64
-    (amount - fee, fee)
-}
-
 #[macro_export]
 macro_rules! ensure_account_size {
     ($t:ty, $s:expr) => {

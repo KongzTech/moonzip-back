@@ -1,6 +1,6 @@
-use super::curve::CurveConfig;
+use super::{curve::CurveConfig, CurvedPoolConfig};
 use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
-use anchor_lang::{prelude::*, solana_program::native_token::LAMPORTS_PER_SOL};
+use anchor_lang::prelude::*;
 
 pub const GLOBAL_ACCOUNT_PREFIX: &[u8] = b"curved-pool-global-account";
 
@@ -31,7 +31,7 @@ pub struct SetCurvedPoolGlobalConfigAccounts<'info> {
 }
 
 #[account]
-#[derive(Default, PartialEq, PartialOrd)]
+#[derive(Default, PartialEq, PartialOrd, Debug)]
 pub struct GlobalCurvedPoolAccount {
     pub config: GlobalCurvedPoolConfig,
     pub bump: u8,
@@ -46,13 +46,13 @@ impl Sizable for GlobalCurvedPoolAccount {
     }
 }
 
-ensure_account_size!(GlobalCurvedPoolAccount, 50);
+ensure_account_size!(GlobalCurvedPoolAccount, 60);
 
-#[derive(AnchorDeserialize, AnchorSerialize, Clone, PartialEq, PartialOrd)]
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, PartialEq, PartialOrd, Debug)]
 pub struct GlobalCurvedPoolConfig {
     pub curve: CurveConfig,
     pub token_decimals: u8,
-    pub lamports_to_close: u64,
+    pub pool: CurvedPoolConfig,
 }
 
 impl Default for GlobalCurvedPoolConfig {
@@ -60,7 +60,7 @@ impl Default for GlobalCurvedPoolConfig {
         Self {
             curve: Default::default(),
             token_decimals: 6,
-            lamports_to_close: LAMPORTS_PER_SOL * 80,
+            pool: Default::default(),
         }
     }
 }
@@ -70,7 +70,7 @@ impl Sizable for GlobalCurvedPoolConfig {
         Self {
             curve: Sizable::longest(),
             token_decimals: Sizable::longest(),
-            lamports_to_close: Sizable::longest(),
+            pool: Sizable::longest(),
         }
     }
 }

@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                project.id,\n                project.owner AS \"owner: _\",\n                token_meta.name,\n                token_meta.description,\n                project.stage AS \"stage: _\",\n                project.static_pool_pubkey AS \"static_pool_pubkey?: _\",\n                project.curve_pool_keypair AS \"curve_pool_keypair?: _\",\n                project.created_at AS \"created_at: _\"\n            FROM project, token_meta WHERE project.id = $1 AND token_meta.project_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "stage: _",
+        "type_info": {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "Confirmed",
+                "OnStaticPool",
+                "StaticPoolClosed",
+                "OnCurvePool",
+                "CurvePoolClosed",
+                "Graduated"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "static_pool_pubkey?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "curve_pool_keypair?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at: _",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e8dfc86e5bdddc65147a2ce1aa5790f8d431fb34b407770db2939c899a4a0584"
+}

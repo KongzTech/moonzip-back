@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use const_str_to_pubkey::str_to_pubkey;
 pub mod common;
 pub mod curved_pool;
+pub mod fee;
 pub mod project;
 pub mod pumpfun;
 pub mod static_pool;
@@ -15,6 +16,7 @@ pub const PROGRAM_AUTHORITY: Pubkey = str_to_pubkey(env!("MOONZIP_AUTHORITY"));
 pub mod moonzip {
     pub use super::curved_pool::global::*;
     pub use super::curved_pool::*;
+    pub use super::fee::*;
     pub use super::project::*;
     pub use super::static_pool::*;
     pub use super::transmuter::*;
@@ -25,6 +27,18 @@ pub mod moonzip {
         data: CreateProjectData,
     ) -> Result<()> {
         project::create(ctx, data)
+    }
+
+    pub fn set_fee_config(ctx: Context<SetFeeConfigAccounts>, config: FeeConfig) -> Result<()> {
+        fee::set_fee_config(ctx, config)
+    }
+
+    pub fn extract_fee(ctx: Context<ExtractFeeAccounts>, data: ExtractFeeData) -> Result<()> {
+        fee::extract_fee(ctx, data)
+    }
+
+    pub fn take_account_as_fee(ctx: Context<TakeAccountAsFeeAccounts>) -> Result<()> {
+        fee::take_account_as_fee(ctx)
     }
 
     pub fn project_lock_latch(ctx: Context<ProjectLockLatchAccounts>) -> Result<()> {
@@ -53,7 +67,7 @@ pub mod moonzip {
         static_pool::buy(ctx, data)
     }
 
-    pub fn sell_from_static_pool(
+    pub fn sell_to_static_pool(
         ctx: Context<SellToStaticPoolAccounts>,
         data: SellToStaticPoolData,
     ) -> Result<()> {
@@ -104,5 +118,9 @@ pub mod moonzip {
 
     pub fn transmute(ctx: Context<TransmuteAccounts>, data: TransmuteData) -> Result<()> {
         transmuter::transmute(ctx, data)
+    }
+
+    pub fn transmute_idempotent(ctx: Context<TransmuteIdempotentAccounts>) -> Result<()> {
+        transmuter::transmute_idempotent(ctx)
     }
 }

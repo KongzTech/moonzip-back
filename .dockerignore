@@ -3,3 +3,12 @@
 *local*
 target
 node_modules
+/deploy
+/dev
+/docker
+test-ledger
+.direnv
+.anchor
+*idea*
+*vscode*
+tmp

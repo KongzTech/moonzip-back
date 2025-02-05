@@ -75,7 +75,7 @@ impl TxExecutor {
         meta: &mut DataReceiver<solana::Meta>,
         request: &TransactionRequest,
     ) -> anyhow::Result<anyhow::Result<()>> {
-        let blockhash = meta.get().await?.recent_blockhash;
+        let blockhash = meta.get()?.recent_blockhash;
         let tx = request.signed(blockhash);
         let signature = self.solana_pool.jito_client().submit_single_tx(&tx).await?;
 
@@ -134,7 +134,7 @@ impl TxExecutor {
         meta: &mut DataReceiver<solana::Meta>,
         requests: &[TransactionRequest],
     ) -> anyhow::Result<anyhow::Result<()>> {
-        let blockhash = meta.get().await?.recent_blockhash;
+        let blockhash = meta.get()?.recent_blockhash;
 
         let txs = requests
             .iter()

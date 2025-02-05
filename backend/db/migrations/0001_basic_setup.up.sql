@@ -1,8 +1,9 @@
 -- Create enum type for project stages
 CREATE TYPE project_stage AS ENUM (
     'Created',
+    'Confirmed',
     'OnStaticPool',
-    'StaticPoolClosed'
+    'StaticPoolClosed',
     'OnCurvePool',
     'CurvePoolClosed',
     'Graduated'
@@ -18,10 +19,13 @@ CREATE DOMAIN balance AS NUMERIC(20, 0)
         VALUE >= 0 AND VALUE <= 18446744073709551615
     );
 
+CREATE TYPE static_pool_config AS (
+    launch_ts bigint
+);
+
 CREATE TYPE deploy_schema AS (
-    use_static_pool BOOLEAN,
+    static_pool static_pool_config,
     curve_pool curve_variant,
-    launch_after INTERVAL,
     dev_purchase balance
 );
 
@@ -77,7 +81,7 @@ BEGIN
         )
         RETURNING keypair
     )
-    SELECT keypair INTO new_key
+    SELECT keypair INTO STRICT new_key
     FROM deleted_key;
 
     -- Update project with new key

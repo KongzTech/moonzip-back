@@ -1,0 +1,8 @@
+api: 
+  listen:
+    host: "0.0.0.0"
+    port: 8080
+  expose_dev: true
+  auth:
+    encoding_key: "OCwwEOFJtv2m7drF6v7AZwFPiv+B24GD7kBlgsYGB0U="
+    decoding_key: "OCwwEOFJtv2m7drF6v7AZwFPiv+B24GD7kBlgsYGB0U="

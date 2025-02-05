@@ -1,8 +1,11 @@
-use std::{fmt::Display, future::Future};
+use std::{fmt::Display, future::Future, pin::Pin, task::Poll};
 
 use anyhow::bail;
+use base64::Engine as _;
+use futures_util::{task, Stream};
 use reqwest::Response;
 use serde::{de::DeserializeOwned, Serialize, Serializer};
+use sync_wrapper::SyncWrapper;
 use tracing::debug;
 
 pub mod keypair;
@@ -97,4 +100,30 @@ where
     let serialized_data =
         bincode::serialize(tx).map_err(|err| serde::ser::Error::custom(err.to_string()))?;
     serializer.serialize_str(&bs58::encode(serialized_data).into_string())
+}
+
+pub fn serialize_tx_bs64<S>(tx: &impl Serialize, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(
+        &base64::engine::general_purpose::STANDARD.encode(
+            bincode::serialize(tx).map_err(|err| serde::ser::Error::custom(err.to_string()))?,
+        ),
+    )
+}
+
+pub struct SyncStream<S>(SyncWrapper<S>);
+
+impl<S> SyncStream<S> {
+    pub fn new(stream: S) -> Self {
+        Self(SyncWrapper::new(stream))
+    }
+}
+
+impl<S: Unpin + Stream> Stream for SyncStream<S> {
+    type Item = S::Item;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().0).get_pin_mut().poll_next(cx)
+    }
 }

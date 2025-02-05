@@ -11,8 +11,10 @@
             "kind": {
               "Enum": [
                 "Created",
+                "Confirmed",
                 "OnStaticPool",
-                "StaticPoolClosedOnCurvePool",
+                "StaticPoolClosed",
+                "OnCurvePool",
                 "CurvePoolClosed",
                 "Graduated"
               ]

@@ -1,0 +1,28 @@
+db:
+  url: "postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable"
+keys:
+  authority:
+    type: from_file
+    path: "./keys/test/mau6Cw3hZX7sPNtDcq69wNyyMbsNcUrubRmTPvtnkTN.json"
+solana_pool:
+  rpc_clients:
+    - node:
+        type: any
+        rpc_url: "http://solana-test-validator:18899"
+    - node:
+        type: any
+        rpc_url: "http://solana-test-validator:18899"
+    - node:
+        type: any
+        rpc_url: "http://solana-test-validator:18899"
+  jito_clients:
+    - base_url: "http://jito-mock:13000"
+    - base_url: "http://jito-mock:13000"
+    - base_url: "http://jito-mock:13000"
+fetchers:
+  solana_meta:
+    tick_interval: 1s
+    error_backoff: 200ms
+instructions:
+  allowed_launch_periods:
+    - 10

@@ -1,26 +1,37 @@
 use backend::{
-    api::router,
     app::{
-        instructions::{self, InstructionsBuilder},
-        keys_loader::KeysLoader,
-        migrator::Migrator,
-        storage::StorageClient,
-        App,
+        instructions::{self, InstructionsBuilder, InstructionsConfig},
+        keys_loader::{self, KeysLoader},
+        migrator::{Migrator, MigratorConfig},
+        storage::{StorageClient, StorageConfig},
     },
-    cfg,
-    solana::SolanaKeys,
+    cfg::FetchersConfig,
+    log::setup_log,
+    solana::{SolanaKeys, SolanaKeysConfig},
 };
+use serde::Deserialize;
 use services_common::{
-    api::server::{serve, AppState},
     cfg::load_config,
-    solana::pool::SolanaPool,
-    utils::period_fetch::{PeriodicFetcher, PeriodicFetcherConfig},
+    solana::pool::{SolanaPool, SolanaPoolConfig},
+    utils::period_fetch::PeriodicFetcher,
 };
-use std::{sync::Arc, time::Duration};
+
+#[derive(Deserialize, Debug, Clone)]
+struct Config {
+    db: StorageConfig,
+    keys: SolanaKeysConfig,
+    solana_pool: SolanaPoolConfig,
+    migrator: MigratorConfig,
+    token_keys_loader: keys_loader::Config,
+    #[serde(default)]
+    instructions: InstructionsConfig,
+    fetchers: FetchersConfig,
+}
 
 #[tokio::main]
 pub async fn main() -> anyhow::Result<()> {
-    let cfg = load_config::<crate::cfg::Config>();
+    setup_log();
+    let cfg = load_config::<Config>();
     let storage_client = StorageClient::from_config(cfg.db).await?;
     let solana_pool = SolanaPool::from_cfg(cfg.solana_pool)?;
     KeysLoader::new(cfg.token_keys_loader, storage_client.clone()).serve();
@@ -28,10 +39,7 @@ pub async fn main() -> anyhow::Result<()> {
 
     let solana_meta = PeriodicFetcher::new(
         instructions::solana::MetaFetcher::new(solana_pool.clone()),
-        PeriodicFetcherConfig {
-            tick_interval: Duration::from_secs(1),
-            error_backoff: Duration::from_secs(1),
-        },
+        cfg.fetchers.solana_meta,
     )
     .serve();
 
@@ -41,7 +49,7 @@ pub async fn main() -> anyhow::Result<()> {
         config: cfg.instructions.into(),
     };
 
-    Migrator::serve(
+    let handle = Migrator::serve(
         solana_pool.clone(),
         solana_meta.clone(),
         keys.clone(),
@@ -50,10 +58,6 @@ pub async fn main() -> anyhow::Result<()> {
         cfg.migrator,
     )
     .await?;
-
-    let app = Arc::new(App::new(storage_client, instructions_builder).await);
-    let api_state = AppState::new(app, cfg.api);
-
-    serve(api_state, router()).await?;
+    handle.await?;
     Ok(())
 }

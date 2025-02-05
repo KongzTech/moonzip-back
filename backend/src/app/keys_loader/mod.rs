@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -56,7 +56,7 @@ impl KeysLoader {
             if path.is_file() {
                 match self.load_keypair_from_file(&path).await {
                     Ok(keypair) => info!("Loaded token keypair with pubkey: {}", keypair.pubkey()),
-                    Err(err) => warn!("Failed to decode keypair from: {:?}: {err:#}", path),
+                    Err(err) => debug!("Failed to decode keypair from: {:?}: {err:#}", path),
                 }
             }
         }
@@ -66,6 +66,7 @@ impl KeysLoader {
 
     async fn load_keypair_from_file(&self, path: &Path) -> anyhow::Result<Keypair> {
         let data = fs::read(path).await?;
+        let data: Vec<u8> = serde_json::from_slice(&data)?;
         let keypair = Keypair::from_bytes(&data)?;
 
         let stored = StoredKeypair::from_keypair(&keypair);

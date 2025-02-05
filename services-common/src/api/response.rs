@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::ErrorKind};
 
 use axum::{
-    extract::{rejection::JsonRejection, FromRequest},
+    extract::{multipart::MultipartError, rejection::JsonRejection, FromRequest},
     response::{IntoResponse, Response},
 };
 
@@ -49,6 +49,18 @@ impl ApiError {
     }
 }
 
+impl From<MultipartError> for ApiError {
+    fn from(err: MultipartError) -> Self {
+        ApiError::InvalidRequest(anyhow::anyhow!(err))
+    }
+}
+
+impl From<ApiError> for std::io::Error {
+    fn from(value: ApiError) -> Self {
+        Self::new(ErrorKind::InvalidInput, format!("{value}"))
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, ToSchema, PartialEq, Eq)]
 pub struct ErrorResponse {
     pub message: String,
@@ -78,7 +90,7 @@ impl IntoResponse for ApiError {
 
         let (status, message) = match self {
             ApiError::Internal(err) => {
-                tracing::error!(%err, "internal error");
+                tracing::error!("internal error while handling API request: {err:?}");
 
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

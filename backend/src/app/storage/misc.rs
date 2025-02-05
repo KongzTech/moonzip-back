@@ -57,7 +57,7 @@ impl From<StoredKeypair> for Keypair {
 #[derive(
     Debug, Serialize, Deserialize, sqlx::Type, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord,
 )]
-#[sqlx(transparent, type_name = "balance", no_pg_array)]
+#[sqlx(type_name = "balance")]
 pub struct Balance(Decimal);
 
 impl From<u64> for Balance {

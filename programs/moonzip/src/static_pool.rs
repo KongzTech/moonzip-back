@@ -37,7 +37,11 @@ pub fn create(ctx: Context<CreateStaticPoolAccounts>, data: CreateStaticPoolData
 }
 
 pub fn graduate(ctx: Context<GraduateStaticPoolAccounts>) -> Result<()> {
-    if !ctx.accounts.pool.close_if_needed() {
+    if ctx.accounts.pool.close_if_needed() {
+        ctx.accounts.project.stage = ProjectStage::StaticPoolClosed;
+    }
+
+    if ctx.accounts.pool.state != StaticPoolState::Closed {
         return err!(StaticPoolError::NotClosed);
     }
 
@@ -138,23 +142,23 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
         .accounts
         .pool
         .collected_lamports
-        .checked_sub(data.amount)
+        .checked_sub(data.tokens)
         .expect("invariant: lamports amount becomes negative");
 
     anchor_spl::token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token::Transfer {
-                from: ctx.accounts.user_pool_account.to_account_info(),
-                to: ctx.accounts.pool_mint_account.to_account_info(),
+                from: ctx.accounts.user_token_account.to_account_info(),
+                to: ctx.accounts.pool_token_account.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
-        data.amount,
+        data.tokens,
     )?;
 
-    ctx.accounts.pool.sub_lamports(data.amount)?;
-    ctx.accounts.user.add_lamports(data.amount)?;
+    ctx.accounts.pool.sub_lamports(data.tokens)?;
+    ctx.accounts.user.add_lamports(data.tokens)?;
 
     Ok(())
 }
@@ -337,7 +341,7 @@ pub struct BuyFromStaticPoolAccounts<'info> {
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone)]
 pub struct SellToStaticPoolData {
     pub project_id: ProjectId,
-    pub amount: u64,
+    pub tokens: u64,
 }
 
 #[derive(Accounts)]
@@ -364,14 +368,14 @@ pub struct SellToStaticPoolAccounts<'info> {
         associated_token::mint = mint,
         associated_token::authority = user,
     )]
-    pub user_pool_account: Account<'info, TokenAccount>,
+    pub user_token_account: Account<'info, TokenAccount>,
 
     #[account(
         mut,
         associated_token::mint = mint,
         associated_token::authority = pool,
     )]
-    pub pool_mint_account: Account<'info, TokenAccount>,
+    pub pool_token_account: Account<'info, TokenAccount>,
 
     #[account(mut,
         seeds = [STATIC_POOL_PREFIX, mint.key().as_ref()], bump=pool.bump
@@ -387,6 +391,9 @@ pub struct SellToStaticPoolAccounts<'info> {
 pub struct GraduateStaticPoolAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(mut, constraint = project.id == pool.project_id)]
+    pub project: Account<'info, Project>,
 
     /// CHECK: only for lamports receiving
     #[account(mut)]

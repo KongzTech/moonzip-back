@@ -1,0 +1,15 @@
+migrator:
+  tick_interval: 3s
+  mzip_ipfs:
+    gateway: "moon"
+    api_key: "mock-api-key"
+    api_secret: "mock-api-secret"
+    base_url: "http://pinata-mock:14001"
+  pumpfun_ipfs:
+    base_url: "http://pumpfun-mock:14002"
+  tx_exec:
+    max_tries: 3
+    err_retry_interval: 300ms
+token_keys_loader:
+  directory: "/tmp/mzip_test_keys"
+  tick_interval: 500ms 

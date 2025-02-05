@@ -1,4 +1,5 @@
-use anchor_client::anchor_lang::AnchorDeserialize;
+use anchor_client::anchor_lang::AccountDeserialize as _;
+use anyhow::Context as _;
 use moonzip::moonzip::GlobalCurvedPoolAccount;
 use once_cell::sync::Lazy;
 use services_common::{solana::pool::SolanaPool, utils::period_fetch::FetchExecutor};
@@ -24,12 +25,12 @@ impl FetchExecutor<Meta> for MetaFetcher {
             .get_account_with_commitment(&GLOBAL_ACCOUNT, CommitmentConfig::finalized())
             .await?;
         let marker = global.context.slot;
-        let global_account = GlobalCurvedPoolAccount::try_from_slice(
-            &global
-                .value
-                .ok_or_else(|| anyhow::anyhow!("no global curve pool account yet"))?
-                .data,
-        )?;
+        let data = global
+            .value
+            .ok_or_else(|| anyhow::anyhow!("no global curve pool account yet"))?
+            .data;
+        let global_account = GlobalCurvedPoolAccount::try_deserialize(&mut data.as_slice())
+            .with_context(|| format!("deserialize global curve pool account, raw: {data:?}"))?;
         Ok(Meta {
             marker,
             global_account,

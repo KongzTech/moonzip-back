@@ -1,13 +1,15 @@
 use crate::{
-    ensure_account_size, utils::Sizable, Project, ProjectId, ProjectStage, PROGRAM_AUTHORITY,
-    PROJECT_PREFIX,
+    ensure_account_size,
+    fee::{take_fee, FeeAccount, FEE_PREFIX},
+    utils::Sizable,
+    Project, ProjectId, ProjectStage, PROGRAM_AUTHORITY, PROJECT_PREFIX,
 };
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::{
     associated_token::AssociatedToken,
     token::{Mint, MintTo, Token, TokenAccount},
 };
-use curve::{BuyCalculator, CurveState, SellCalculator};
+use curve::{BuyCalculator, CalcBuy as _, CalcSell as _, CurveState, SellCalculator};
 use global::{GlobalCurvedPoolAccount, GLOBAL_ACCOUNT_PREFIX};
 
 pub mod curve;
@@ -38,7 +40,7 @@ pub fn create(ctx: Context<CreateCurvedPoolAccounts>, data: CreateCurvedPoolData
 
     ctx.accounts.pool.set_inner(CurvedPool {
         mint: ctx.accounts.mint.key(),
-        config: data.config,
+        config: ctx.accounts.global.config.pool,
         curve,
         status: CurvedPoolStatus::Active,
         project_id: data.project_id,
@@ -73,10 +75,13 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
     }
 
     let sols = BuyCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
-    if sols > data.max_sol_cost {
+    let fee = ctx.accounts.fee.config.on_buy.part_of(sols);
+    let with_fee = sols.saturating_sub(fee);
+
+    if with_fee > data.max_sol_cost {
         return err!(CurvedPoolError::SlippageFailure);
     }
-    if !ctx.accounts.pool.buy_allowed(sols, data.tokens) {
+    if !ctx.accounts.pool.buy_allowed(with_fee, data.tokens) {
         return err!(CurvedPoolError::OperationDisallowed);
     }
 
@@ -112,6 +117,13 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
         sols,
     )?;
 
+    take_fee(
+        &ctx.accounts.system_program,
+        &ctx.accounts.fee,
+        &ctx.accounts.user,
+        fee,
+    )?;
+
     Ok(())
 }
 
@@ -145,21 +157,29 @@ pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolDa
         data.tokens,
     )?;
 
+    let fee = ctx.accounts.fee.config.on_sell.part_of(sols);
     ctx.accounts.pool.sub_lamports(sols)?;
-    ctx.accounts.user.add_lamports(sols)?;
+    ctx.accounts.user.add_lamports(sols - fee)?;
+    ctx.accounts.fee.add_lamports(fee)?;
 
     Ok(())
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Default, Clone, PartialEq, PartialOrd)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Default, Clone, PartialEq, PartialOrd, Copy, Debug,
+)]
 pub struct CurvedPoolConfig {
-    min_tradeable_sol: Option<u64>,
-    max_lamports: u64,
+    pub min_tradeable_sol: Option<u64>,
+    pub min_sol_to_close: Option<u64>,
 }
 
 impl CurvedPoolConfig {
     pub fn min_tradeable_sol(&self) -> u64 {
         self.min_tradeable_sol.unwrap_or(DEFAULT_MIN_TRADEABLE_SOL)
+    }
+
+    pub fn min_sol_to_close(&self) -> u64 {
+        self.min_sol_to_close.unwrap_or(0)
     }
 }
 
@@ -167,7 +187,7 @@ impl Sizable for CurvedPoolConfig {
     fn longest() -> Self {
         Self {
             min_tradeable_sol: Some(Sizable::longest()),
-            max_lamports: Sizable::longest(),
+            min_sol_to_close: Some(Sizable::longest()),
         }
     }
 }
@@ -185,7 +205,7 @@ pub struct CurvedPool {
 
 impl CurvedPool {
     pub fn close_if_needed(&mut self) -> bool {
-        if self.curve.sol_balance() >= self.config.max_lamports {
+        if self.curve.token_balance() <= self.tokens_to_close() {
             self.status = CurvedPoolStatus::Closed;
             true
         } else {
@@ -194,15 +214,26 @@ impl CurvedPool {
     }
 
     pub fn buy_allowed(&self, sols: u64, tokens: u64) -> bool {
-        // limit order must be disabled for the last tokens
-        if tokens == self.curve.token_balance() {
+        if tokens > self.curve.token_balance() {
+            msg!("buy not allowed, tokens exceed curve's balance");
+            return false;
+        }
+
+        // order limit must be disabled for the last tokens
+        if tokens <= self.tokens_to_close() {
             return true;
         }
-        sols >= self.config.min_tradeable_sol()
+
+        sols >= self.config.min_tradeable_sol() && tokens > 0
     }
 
-    pub fn sell_allowed(&self, _tokens: u64, sols: u64) -> bool {
-        sols >= self.config.min_tradeable_sol()
+    pub fn sell_allowed(&self, tokens: u64, sols: u64) -> bool {
+        sols > 0 && tokens > 0
+    }
+
+    fn tokens_to_close(&self) -> u64 {
+        let calculator = BuyCalculator::new(&self.curve);
+        calculator.fixed_sols(self.config.min_sol_to_close())
     }
 }
 
@@ -237,12 +268,11 @@ impl Sizable for CurvedPoolStatus {
     }
 }
 
-ensure_account_size!(CurvedPool, 115);
+ensure_account_size!(CurvedPool, 116);
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CreateCurvedPoolData {
-    config: CurvedPoolConfig,
-    project_id: ProjectId,
+    pub project_id: ProjectId,
 }
 
 #[derive(Accounts)]
@@ -306,6 +336,12 @@ pub struct BuyFromCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
+        seeds = [FEE_PREFIX], bump=fee.bump
+    )]
+    pub fee: Account<'info, FeeAccount>,
+
+    #[account(
+        mut,
         constraint = project.id == pool.project_id,
         seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
     )]
@@ -357,6 +393,12 @@ pub struct SellFromCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
+        seeds = [FEE_PREFIX], bump=fee.bump
+    )]
+    pub fee: Account<'info, FeeAccount>,
+
+    #[account(
+        mut,
         constraint = project.id == pool.project_id,
         seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
     )]
@@ -369,14 +411,6 @@ pub struct SellFromCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
-        associated_token::mint = mint,
-        associated_token::authority = user,
-    )]
-    pub user_pool_account: Account<'info, TokenAccount>,
-
-    #[account(
-        init_if_needed,
-        payer = user,
         associated_token::mint = mint,
         associated_token::authority = user,
     )]
@@ -404,6 +438,12 @@ pub struct SellFromCurvedPoolAccounts<'info> {
 pub struct GraduateCurvedPoolAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [FEE_PREFIX], bump=fee.bump
+    )]
+    pub fee: Account<'info, FeeAccount>,
 
     /// CHECK: only for lamports receiving
     #[account(mut)]

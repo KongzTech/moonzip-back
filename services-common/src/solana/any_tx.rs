@@ -1,8 +1,4 @@
-use base64::{
-    alphabet::STANDARD,
-    engine::{general_purpose::NO_PAD, GeneralPurpose},
-    Engine,
-};
+use base64::Engine;
 use delegate::delegate;
 use serde::Serialize;
 use solana_client::rpc_client::SerializableTransaction;
@@ -84,16 +80,13 @@ pub enum AnyTx {
     Versioned(VersionedTransaction),
 }
 
-const BASE64_ENGINE: GeneralPurpose = GeneralPurpose::new(&STANDARD, NO_PAD);
-
 impl AnyTx {
     pub fn serialize_base64(&self) -> anyhow::Result<String> {
         let bincoded = match self {
             AnyTx::Legacy(tx) => bincode::serialize(tx)?,
             AnyTx::Versioned(tx) => bincode::serialize(tx)?,
         };
-
-        Ok(BASE64_ENGINE.encode(bincoded))
+        Ok(base64::engine::general_purpose::STANDARD.encode(bincoded))
     }
 }
 

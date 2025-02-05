@@ -6,17 +6,25 @@ import {
   getAssociatedTokenAddressSync,
   getMinimumBalanceForRentExemptAccount,
 } from "@solana/spl-token";
-import { Moonzip } from "../target/types/moonzip";
+import { Moonzip } from "../../target/types/moonzip";
 import {
   airdrop,
+  approxEquals,
+  beforeAll,
   createProject,
+  feeAmount,
   getAuthority,
   getProjectAddress,
   keypairFromFile,
   mintToken,
+  MZIP_FEE,
+  provideGlobalConfig,
+  pumpfunLikeConfig,
+  removeFeePart,
+  restoreFullAmount,
   tokenBalance,
   tokenInit,
-} from "./utils";
+} from "../utils/utils";
 import { BN } from "bn.js";
 import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
@@ -32,34 +40,6 @@ export function getCurvedPoolAddress(pool_mint: PublicKey) {
     main_program.programId
   );
   return poolAddress;
-}
-
-export function pumpfunLikeConfig() {
-  return {
-    curve: {
-      initialVirtualTokenReserves: new BN(1073000000000000),
-      initialVirtualSolReserves: new BN(30000000000),
-      initialRealTokenReserves: new BN(793100000000000),
-      totalTokenSupply: new BN(1000000000000000),
-    },
-    tokenDecimals: 9,
-    lamportsToClose: new BN("1000000000000000000"),
-  };
-}
-
-async function provideConfig() {
-  const authority = getAuthority();
-  const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
-  const connection = main_program.provider.connection;
-  let signature = await main_program.methods
-    .setCurvedPoolGlobalConfig(pumpfunLikeConfig())
-    .accounts({
-      authority: authority.publicKey,
-    })
-    .signers([authority])
-    .rpc();
-  await connection.confirmTransaction(signature);
-  console.log("global config provided for curved pool");
 }
 
 export async function createCurvedPool(
@@ -79,7 +59,6 @@ export async function createCurvedPool(
   const projectAddress = getProjectAddress(project_id);
 
   await airdrop(authority.publicKey, new BN(LAMPORTS_PER_SOL));
-  await provideConfig();
 
   let signature = await main_program.methods
     .createCurvedPool({
@@ -100,6 +79,7 @@ export async function createCurvedPool(
 
 describe("curved pool", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
+  before(beforeAll);
 
   const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
   const provider = main_program.provider as anchor.AnchorProvider;
@@ -111,11 +91,6 @@ describe("curved pool", () => {
 
     const user = anchor.web3.Keypair.generate();
     const curveConfig = pumpfunLikeConfig();
-
-    const config = {
-      minTradeableSol: null,
-      maxLamports: new BN(LAMPORTS_PER_SOL),
-    };
 
     const buyAmount = new BN(100000000);
     const sellAmount = new BN(80000000);
@@ -138,9 +113,6 @@ describe("curved pool", () => {
 
     expect(state.status).to.eql({ active: {} });
     expect(state.mint).to.eql(poolMint.publicKey);
-    expect(state.config.maxLamports.toNumber()).to.eql(
-      config.maxLamports.toNumber()
-    );
 
     expect(state.curve.virtualTokenReserves.toNumber()).to.eql(
       curveConfig.curve.initialVirtualTokenReserves.toNumber()
@@ -187,16 +159,14 @@ describe("curved pool", () => {
       realTokenReserves: curveConfig.curve.initialRealTokenReserves.sub(
         new BN(buyAmount)
       ),
-      realSolReserves: new BN(actualSolAmount),
+      realSolReserves: removeFeePart(new BN(actualSolAmount)),
       totalTokenSupply: curveConfig.curve.totalTokenSupply,
     };
 
     expect(state.curve.realTokenReserves.toNumber()).to.eql(
       expectedState.realTokenReserves.toNumber()
     );
-    expect(state.curve.realSolReserves.toNumber()).to.eql(
-      expectedState.realSolReserves.toNumber()
-    );
+    approxEquals(state.curve.realSolReserves, expectedState.realSolReserves);
     expect(state.curve.totalTokenSupply.toNumber()).to.eql(
       expectedState.totalTokenSupply.toNumber()
     );
@@ -223,6 +193,8 @@ describe("curved pool", () => {
     const addedSols =
       (await connection.getBalance(user.publicKey)) - preSellBalance;
     expect(addedSols).to.gt(0);
+
+    console.log("added sols: ", addedSols.toString());
     const finalTokenBalance = await tokenBalance(
       poolMint.publicKey,
       user.publicKey
@@ -233,17 +205,17 @@ describe("curved pool", () => {
     expectedState.realTokenReserves = expectedState.realTokenReserves.add(
       new BN(sellAmount)
     );
-    expectedState.realSolReserves = expectedState.realSolReserves.sub(
-      new BN(addedSols)
-    );
+
+    let withFee = restoreFullAmount(new BN(addedSols));
+    console.log("sol amount on sell with fee: ", withFee.toString());
+
+    expectedState.realSolReserves = expectedState.realSolReserves.sub(withFee);
     expect(expectedState.realSolReserves.toNumber()).to.gt(0);
 
     expect(state.curve.realTokenReserves.toNumber()).to.eql(
       expectedState.realTokenReserves.toNumber()
     );
-    expect(state.curve.realSolReserves.toNumber()).to.eql(
-      expectedState.realSolReserves.toNumber()
-    );
+    approxEquals(state.curve.realSolReserves, expectedState.realSolReserves);
     expect(state.curve.totalTokenSupply.toNumber()).to.eql(
       expectedState.totalTokenSupply.toNumber()
     );

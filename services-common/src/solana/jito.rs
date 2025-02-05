@@ -252,7 +252,7 @@ mod tests {
             PeriodicFetcherConfig::zero(),
         )
         .serve();
-        assert!(rx.get().await?.landed_tips_75th_percentile > 0.0);
+        assert!(rx.wait().await?.landed_tips_75th_percentile > 0.0);
         Ok(())
     }
 }

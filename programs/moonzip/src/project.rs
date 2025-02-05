@@ -1,12 +1,8 @@
-use crate::{
-    curved_pool::CurvedPool, ensure_account_size, static_pool::StaticPool, utils::Sizable,
-    PROGRAM_AUTHORITY,
-};
-use anchor_lang::{prelude::*, solana_program::native_token::LAMPORTS_PER_SOL, system_program};
+use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
+use anchor_lang::{prelude::*, system_program};
 use derive_more::derive::{From, Into};
 
 pub const PROJECT_PREFIX: &[u8] = b"project";
-const PUMPFUN_INIT_PRICE: u64 = (0.022 * LAMPORTS_PER_SOL as f64) as u64;
 
 pub fn project_address(id: &ProjectId) -> Pubkey {
     let (address, _) = Pubkey::find_program_address(&[b"project", &id.to_bytes()], &crate::ID);
@@ -14,28 +10,11 @@ pub fn project_address(id: &ProjectId) -> Pubkey {
 }
 
 pub fn create(ctx: Context<CreateProjectAccounts>, data: CreateProjectData) -> Result<()> {
-    let mut amount = 0;
-    if data.schema.use_static_pool {
-        amount += Rent::get()?.minimum_balance(StaticPool::ACCOUNT_SIZE);
-    }
-    match data.schema.curve_pool {
-        CurvePoolVariant::Moonzip => {
-            amount += Rent::get()?.minimum_balance(CurvedPool::ACCOUNT_SIZE);
-        }
-        CurvePoolVariant::Pumpfun => {
-            amount += PUMPFUN_INIT_PRICE;
-        }
-    }
-
-    if let Some(dev_purchase) = data.schema.dev_purchase {
-        amount += dev_purchase;
-    }
-
     ctx.accounts.project.set_inner(Project {
         id: data.id,
         schema: data.schema,
         stage: ProjectStage::Created,
-        latch: ProjectLatch::new(amount),
+        latch: ProjectLatch::new(data.creator_deposit),
         bump: ctx.bumps.project,
     });
 
@@ -47,7 +26,7 @@ pub fn create(ctx: Context<CreateProjectAccounts>, data: CreateProjectData) -> R
                 to: ctx.accounts.authority.to_account_info(),
             },
         ),
-        amount,
+        data.creator_deposit,
     )?;
 
     Ok(())
@@ -180,11 +159,12 @@ pub struct CreateProjectAccounts<'info> {
 pub struct CreateProjectData {
     pub id: ProjectId,
     pub schema: ProjectSchema,
+    pub creator_deposit: u64,
 }
 
 #[derive(Accounts)]
 pub struct ProjectLockLatchAccounts<'info> {
-    #[account(mut)]
+    #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
 
     #[account(mut)]
@@ -193,7 +173,7 @@ pub struct ProjectLockLatchAccounts<'info> {
 
 #[derive(Accounts)]
 pub struct ProjectUnlockLatchAccounts<'info> {
-    #[account(mut)]
+    #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
 
     #[account(mut)]
@@ -258,9 +238,15 @@ impl ProjectLatch {
         let after = authority.lamports();
 
         if before > after {
-            self.project_bank
-                .checked_sub(before - after)
-                .ok_or(ProjectError::BankOveruse)?;
+            let diff = before - after;
+            if self.project_bank.checked_sub(diff).is_none() {
+                msg!(
+                    "Bank overuse, need {} lamports, left: {}",
+                    diff,
+                    self.project_bank
+                );
+                return err!(ProjectError::BankOveruse);
+            }
         } else {
             self.project_bank += after - before;
         }

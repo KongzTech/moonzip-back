@@ -2,9 +2,6 @@ MOONZIP_AUTHORITY=mau6Cw3hZX7sPNtDcq69wNyyMbsNcUrubRmTPvtnkTN
 GLOBAL_ENV=eval '\
 	export MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) \
   '
-PUSH_TO_ENV=eval '\
-	rsync -e "docker exec -i" -Pavz --exclude-from=".dockerignore" --exclude-from=".gitignore" --exclude-from="$$HOME/.config/git/ignore" --filter "- .git/" . moonzip-dev-env:/app \
-	'
 
 ifneq (,$(filter n,$(MAKEFLAGS)))
 GLOBAL_ENV=: GLOBAL_ENV
@@ -16,16 +13,23 @@ prepare-env:
 
 .PHONY: build
 build:
-	anchor build
+	cargo build --all
 
-.PHONY: test
-test:
-# Clean pumpfun-cpi to avoid build error
+.PHONY: build-release
+build-release:
+	cargo build --release --all
+
+.PHONY: build-program
+build-program:
+# Clean pumpfun-cpi to avoid build error. TODO: fix why build fails
 	${GLOBAL_ENV} && \
-		cargo test && \
 		cargo clean -p pumpfun-cpi && \
-		anchor build && \
-		anchor test
+		anchor build
+
+.PHONY: unit-test
+unit-test:
+	${GLOBAL_ENV} && \
+		cargo test
 
 .PHONY: lint
 lint:
@@ -34,28 +38,43 @@ lint:
 		cargo clippy -- -D warnings
 	yarn lint
 
-.PHONY: dev-env
-dev-env:
-	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
-	echo "SQLX_OFFLINE=true" >> .env
-	docker compose -f dev/docker-compose.dev.yml down -v && docker compose -f dev/docker-compose.dev.yml up -d --wait
+.PHONY: db-migrate
+db-migrate:
 	sqlx migrate run --source backend/db/migrations
-
-.PHONY: enter-dev-env
-enter-dev-env:
-	DOCKER_BUILDKIT=1 docker build -t moonzip/ci:latest -f docker/Dockerfile.ci .
-	DOCKER_BUILDKIT=1 docker build -t moonzip/dev:latest -f docker/Dockerfile.dev .
-
-	docker rm -f moonzip-dev-env
-	docker run --name=moonzip-dev-env -v rust-cache:/app/target -v node-cache:/app/node_modules --net=host -e MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) -e DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable -e SQLX_OFFLINE=true -t -d --rm moonzip/dev:latest /bin/bash
-	${PUSH_TO_ENV}
-	docker exec -it moonzip-dev-env /bin/bash
-
-.PHONY: push-dev-env
-push-dev-env:
-	${PUSH_TO_ENV}
 
 .PHONY: pre-commit
 pre-commit:
 	cargo sqlx prepare --workspace
+	cargo run --bin api_gen -p backend
+	yarn gen-api-client
 
+.PHONY: test-env
+test-env:
+	DOCKER_BUILDKIT=1 docker build -t moonzip/dev:latest -f docker/Dockerfile.ci --build-arg MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) --target dev .
+	docker compose -f dev/docker-compose.dev.yml down -v --remove-orphans
+	docker compose -f dev/docker-compose.dev.yml up -d --wait
+	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
+	echo "SQLX_OFFLINE=true" >> .env
+
+.PHONY: e2e-test
+e2e-test:
+	docker run --net=host -t moonzip/dev:latest make e2e-test-exec
+
+.PHONY: e2e-test-exec
+e2e-test-exec:
+	mkdir -p ./target
+	[ -d ./idl ] && cp -r ./idl ./target/idl
+	anchor run e2e-test
+
+.PHONY: program-test
+program-test:
+	docker run --net=host -t moonzip/dev:latest make program-test-exec
+
+.PHONY: program-test-exec
+program-test-exec:
+	mkdir -p ./target
+	[ -d ./idl ] && cp -r ./idl ./target/idl
+	anchor run program-test
+
+.PHONY: test
+ext-test: program-test e2e-test

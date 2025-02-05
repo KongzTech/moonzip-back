@@ -79,7 +79,7 @@ pub struct SolanaClientConfig {
 #[serde(rename_all = "lowercase")]
 pub enum NodeType {
     Helius { api_key: String },
-    Local,
+    Any { rpc_url: String },
 }
 
 impl NodeType {
@@ -88,16 +88,7 @@ impl NodeType {
             NodeType::Helius { api_key } => {
                 format!("https://mainnet.helius-rpc.com?api-key={}", api_key)
             }
-            NodeType::Local => "http://localhost:8899".to_string(),
-        }
-    }
-
-    pub fn ws_url(&self) -> String {
-        match self {
-            NodeType::Helius { api_key } => {
-                format!("wss://mainnet.helius-rpc.com?api-key={}", api_key)
-            }
-            NodeType::Local => "ws://localhost:8900".to_string(),
+            NodeType::Any { rpc_url } => rpc_url.clone(),
         }
     }
 }

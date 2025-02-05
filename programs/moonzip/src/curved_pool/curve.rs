@@ -1,4 +1,4 @@
-use crate::utils::Sizable;
+use crate::{fee::BasisPoints, utils::Sizable};
 use anchor_lang::{AnchorDeserialize, AnchorSerialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, AnchorSerialize, AnchorDeserialize)]
@@ -95,6 +95,13 @@ impl CurveState {
     }
 }
 
+pub trait CalcBuy {
+    /// Shows how much tokens would be received for given fixed amount of sols
+    fn fixed_sols(&self, sols: u64) -> u64;
+    /// Shows how much sols are needed to buy a given fixed amount of tokens
+    fn fixed_tokens(&self, tokens: u64) -> u64;
+}
+
 pub struct BuyCalculator<'a> {
     curve: &'a CurveState,
 }
@@ -103,9 +110,9 @@ impl<'a> BuyCalculator<'a> {
     pub fn new(curve: &'a CurveState) -> Self {
         Self { curve }
     }
-
-    /// Shows how much tokens would be received for given fixed amount of sols
-    pub fn fixed_sols(&self, sols: u64) -> u64 {
+}
+impl<'a> CalcBuy for BuyCalculator<'a> {
+    fn fixed_sols(&self, sols: u64) -> u64 {
         let constant = self.curve.constant();
 
         // Calculate the new virtual sol reserves after the purchase
@@ -118,12 +125,10 @@ impl<'a> BuyCalculator<'a> {
         let result: u128 =
             (self.curve.virtual_token_reserves as u128).saturating_sub(new_token_reserves);
 
-        // Convert back to u64 and return the minimum of calculated tokens and real reserves
-        (result as u64).min(self.curve.real_token_reserves)
+        result as u64
     }
 
-    /// Shows how much sols are needed to buy a given fixed amount of tokens
-    pub fn fixed_tokens(&self, tokens: u64) -> u64 {
+    fn fixed_tokens(&self, tokens: u64) -> u64 {
         let constant = self.curve.constant();
         let new_tokens_reserves = self.curve.virtual_token_reserves as u128 + tokens as u128;
         let new_sol_reserves = constant / new_tokens_reserves + 1;
@@ -131,6 +136,39 @@ impl<'a> BuyCalculator<'a> {
             .virtual_sol_reserves
             .saturating_sub(new_sol_reserves as u64)
     }
+}
+
+pub struct BuyCalculatorWithFee<'a> {
+    calculator: BuyCalculator<'a>,
+    fee: BasisPoints,
+}
+
+impl<'a> BuyCalculatorWithFee<'a> {
+    pub fn new(calculator: BuyCalculator<'a>, fee: BasisPoints) -> Self {
+        Self { calculator, fee }
+    }
+}
+
+impl<'a> CalcBuy for BuyCalculatorWithFee<'a> {
+    fn fixed_sols(&self, sols: u64) -> u64 {
+        let fee = self.fee.part_of(sols);
+        let resulting_sol = sols.saturating_sub(fee);
+        self.calculator.fixed_sols(resulting_sol)
+    }
+
+    fn fixed_tokens(&self, tokens: u64) -> u64 {
+        let result = self.calculator.fixed_tokens(tokens);
+        let applied_fee = self.fee.on_top_of(result);
+        result.saturating_add(applied_fee)
+    }
+}
+
+pub trait CalcSell {
+    /// Shows how much sols would be received for a fixed amount of tokens
+    fn fixed_tokens(&self, tokens: u64) -> u64;
+
+    /// Shows how much tokens need to be sold to get a fixed amount of SOL
+    fn fixed_sols(&self, sols: u64) -> u64;
 }
 
 pub struct SellCalculator<'a> {
@@ -141,9 +179,10 @@ impl<'a> SellCalculator<'a> {
     pub fn new(curve: &'a CurveState) -> Self {
         Self { curve }
     }
+}
 
-    /// Shows how much sols would be received for a fixed amount of tokens
-    pub fn fixed_tokens(&self, tokens: u64) -> u64 {
+impl<'a> CalcSell for SellCalculator<'a> {
+    fn fixed_tokens(&self, tokens: u64) -> u64 {
         let constant = self.curve.constant();
         let new_token_reserves = self.curve.virtual_token_reserves as u128 + tokens as u128;
         let new_sol_reserves = constant / new_token_reserves + 1;
@@ -152,12 +191,36 @@ impl<'a> SellCalculator<'a> {
             .saturating_sub(new_sol_reserves as u64)
     }
 
-    /// Shows how much tokens need to be sold to get a fixed amount of SOL
-    pub fn fixed_sols(&self, sols: u64) -> u64 {
+    fn fixed_sols(&self, sols: u64) -> u64 {
         let constant = self.curve.constant();
         let new_token_reserves =
             constant / (self.curve.virtual_sol_reserves as u128 - sols as u128) + 1;
         (new_token_reserves.saturating_sub(self.curve.virtual_token_reserves as u128)) as u64
+    }
+}
+
+pub struct SellCalculatorWithFee<'a> {
+    calculator: SellCalculator<'a>,
+    fee: BasisPoints,
+}
+
+impl<'a> SellCalculatorWithFee<'a> {
+    pub fn new(calculator: SellCalculator<'a>, fee: BasisPoints) -> Self {
+        Self { calculator, fee }
+    }
+}
+
+impl<'a> CalcSell for SellCalculatorWithFee<'a> {
+    fn fixed_tokens(&self, tokens: u64) -> u64 {
+        let result = self.calculator.fixed_tokens(tokens);
+        let fee = self.fee.part_of(result);
+        result.saturating_sub(fee)
+    }
+
+    fn fixed_sols(&self, sols: u64) -> u64 {
+        let fee = self.fee.part_of(sols);
+        let resulting_sols = sols.saturating_sub(fee);
+        self.calculator.fixed_sols(resulting_sols)
     }
 }
 

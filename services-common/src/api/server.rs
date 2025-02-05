@@ -16,7 +16,6 @@ use utoipa::OpenApi;
 use utoipa_rapidoc::RapiDoc;
 use utoipa_redoc::{Redoc, Servable};
 use utoipa_swagger_ui::SwaggerUi;
-use utoipauto::utoipauto;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct ApiConfig {
@@ -109,15 +108,10 @@ impl<T> auth::ConfigProvider for AppState<T> {
     }
 }
 
-pub async fn serve<T: Send + Sync + 'static>(
+pub async fn serve<T: Send + Sync + 'static, O: OpenApi>(
     state: AppState<T>,
     api_router: Router<AppState<T>>,
 ) -> anyhow::Result<()> {
-    #[utoipauto(paths = "./backend/src")]
-    #[derive(OpenApi)]
-    #[openapi()]
-    struct ApiDoc;
-
     let service = Router::new()
         .route("/health", get(health))
         .route("/auth", post(auth::auth::<AppState<T>>));
@@ -138,11 +132,9 @@ pub async fn serve<T: Send + Sync + 'static>(
 
     let app = Router::new();
     let app = if state.config.expose_dev {
-        app.merge(
-            SwaggerUi::new("/api/docs/swagger").url("/api/docs/openapi.json", ApiDoc::openapi()),
-        )
-        .merge(Redoc::with_url("/api/docs/redoc", ApiDoc::openapi()))
-        .merge(RapiDoc::new("/api/docs/openapi.json").path("/api/docs/rapidoc"))
+        app.merge(SwaggerUi::new("/api/docs/swagger").url("/api/docs/openapi.json", O::openapi()))
+            .merge(Redoc::with_url("/api/docs/redoc", O::openapi()))
+            .merge(RapiDoc::new("/api/docs/openapi.json").path("/api/docs/rapidoc"))
     } else {
         app
     };

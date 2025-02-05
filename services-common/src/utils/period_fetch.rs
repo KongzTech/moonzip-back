@@ -1,13 +1,21 @@
 use serde::Deserialize;
 use std::{marker::PhantomData, time::Duration};
 use tokio::sync::watch;
-use tracing::error;
+use tracing::{debug, error};
 
 #[derive(Clone)]
 pub struct DataReceiver<T>(watch::Receiver<Option<T>>);
 
 impl<T: Clone> DataReceiver<T> {
-    pub async fn get(&mut self) -> anyhow::Result<T> {
+    pub fn get(&mut self) -> anyhow::Result<T> {
+        self.0
+            .borrow()
+            .as_ref()
+            .map(|meta| meta.clone())
+            .ok_or_else(|| anyhow::anyhow!("no data received yet"))
+    }
+
+    pub async fn wait(&mut self) -> anyhow::Result<T> {
         Ok(self
             .0
             .wait_for(|meta| meta.is_some())
@@ -31,7 +39,7 @@ pub struct PeriodicFetcher<T, E> {
     _marker: PhantomData<T>,
 }
 
-#[derive(Clone, Deserialize, serde_derive_default::Default)]
+#[derive(Clone, Debug, Deserialize, serde_derive_default::Default)]
 pub struct PeriodicFetcherConfig {
     #[serde(with = "humantime_serde", default = "default_tick_interval")]
     pub tick_interval: Duration,
@@ -84,6 +92,7 @@ impl<T: Send + Sync + 'static + PartialOrd, E: FetchExecutor<T> + Send + Sync + 
             loop {
                 match self.tick(&sender).await {
                     Ok(_) => {
+                        debug!("fetched data from {}", self.executor.name());
                         tokio::time::sleep(self.config.tick_interval).await;
                     }
                     Err(e) => {
@@ -100,7 +109,8 @@ impl<T: Send + Sync + 'static + PartialOrd, E: FetchExecutor<T> + Send + Sync + 
         let mut data = self.executor.fetch().await?;
         sender.send_if_modified(move |old| {
             let Some(old) = old else {
-                return false;
+                *old = Some(data);
+                return true;
             };
             let modified = old < &mut data;
             if modified {

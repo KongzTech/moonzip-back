@@ -1,0 +1,476 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "backend",
+    "description": "",
+    "license": {
+      "name": ""
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/project/buy": {
+      "post": {
+        "tags": [
+          "project"
+        ],
+        "operationId": "buy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully bought tokens from project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuyResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Logical error due to user input"
+          },
+          "5XX": {
+            "description": "Internal server error, contact support"
+          }
+        }
+      }
+    },
+    "/api/project/create": {
+      "post": {
+        "tags": [
+          "project"
+        ],
+        "operationId": "create_project",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully created project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateProjectResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Logical error due to user input"
+          },
+          "5XX": {
+            "description": "Internal server error, contact support"
+          }
+        }
+      }
+    },
+    "/api/project/get": {
+      "get": {
+        "tags": [
+          "project"
+        ],
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully fetched project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetProjectResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Logical error due to user input"
+          },
+          "5XX": {
+            "description": "Internal server error, contact support"
+          }
+        }
+      }
+    },
+    "/api/project/sell": {
+      "post": {
+        "tags": [
+          "project"
+        ],
+        "operationId": "sell",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SellRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully sold tokens to project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SellResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Logical error due to user input"
+          },
+          "5XX": {
+            "description": "Internal server error, contact support"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BuyRequest": {
+        "type": "object",
+        "required": [
+          "user",
+          "projectId",
+          "tokens"
+        ],
+        "properties": {
+          "maxSolCost": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "user": {
+            "type": "string"
+          }
+        }
+      },
+      "BuyResponse": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProjectForm": {
+        "type": "object",
+        "required": [
+          "request",
+          "imageContent"
+        ],
+        "properties": {
+          "imageContent": {
+            "type": "string",
+            "format": "binary",
+            "contentMediaType": "application/octet-stream"
+          },
+          "request": {
+            "$ref": "#/components/schemas/CreateProjectRequest"
+          }
+        }
+      },
+      "CreateProjectRequest": {
+        "type": "object",
+        "required": [
+          "owner",
+          "meta",
+          "deploySchema"
+        ],
+        "properties": {
+          "deploySchema": {
+            "$ref": "#/components/schemas/DeploySchema"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/CreateTokenMeta"
+          },
+          "owner": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProjectResponse": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "transaction"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "transaction": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTokenMeta": {
+        "type": "object",
+        "required": [
+          "name",
+          "symbol",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "telegram": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "twitter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "website": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CurveVariant": {
+        "type": "string",
+        "enum": [
+          "moonzip",
+          "pumpfun"
+        ]
+      },
+      "DeploySchema": {
+        "type": "object",
+        "required": [
+          "curvePool"
+        ],
+        "properties": {
+          "curvePool": {
+            "$ref": "#/components/schemas/CurveVariant"
+          },
+          "devPurchase": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "staticPool": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StaticPoolSchema"
+              }
+            ]
+          }
+        }
+      },
+      "GetProjectRequest": {
+        "type": "object",
+        "required": [
+          "projectId"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "GetProjectResponse": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PublicProject"
+              }
+            ]
+          }
+        }
+      },
+      "PublicProject": {
+        "type": "object",
+        "required": [
+          "id",
+          "owner",
+          "name",
+          "description",
+          "createdAt",
+          "stage"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "curvePoolMint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PublicProjectStage"
+          },
+          "staticPoolMint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PublicProjectStage": {
+        "type": "string",
+        "enum": [
+          "staticPoolActive",
+          "staticPoolClosed",
+          "curvePoolActive",
+          "curvePoolClosed",
+          "graduated"
+        ]
+      },
+      "SellRequest": {
+        "type": "object",
+        "required": [
+          "user",
+          "projectId",
+          "tokens"
+        ],
+        "properties": {
+          "minSolOutput": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "user": {
+            "type": "string"
+          }
+        }
+      },
+      "SellResponse": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "type": "string"
+          }
+        }
+      },
+      "SlippageSettings": {
+        "type": "object",
+        "required": [
+          "slippageBasisPoints"
+        ],
+        "properties": {
+          "slippageBasisPoints": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "StaticPoolSchema": {
+        "type": "object",
+        "required": [
+          "launchPeriod"
+        ],
+        "properties": {
+          "launchPeriod": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

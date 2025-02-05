@@ -1,43 +1,55 @@
-use anyhow::Context as _;
-use instructions::InstructionsBuilder;
-use serde::{Deserialize, Serialize};
-use services_common::utils::serialize_tx_bs58;
-use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer, transaction::Transaction};
-use storage::{
-    project::{DeploySchema, StoredTokenImage},
-    StorageClient,
+use crate::solana::SolanaKeys;
+use anyhow::bail;
+use exposed::{
+    BuyRequest, BuyResponse, CreateProjectRequest, CreateProjectResponse, CreateProjectStreamData,
+    GetProjectRequest, GetProjectResponse, PublicProject, SellRequest, SellResponse,
+    StoredProjectInfo,
 };
+use instructions::{
+    mpl::{SampleMetadata, SAMPLE_MPL_URI},
+    InstructionsBuilder,
+};
+use services_common::utils::period_fetch::DataReceiver;
+use solana_sdk::{signature::Keypair, signer::Signer, transaction::Transaction};
+use sqlx::query_as;
+use std::{pin::pin, time::Duration};
+use storage::{project::StoredProject, StorageClient};
+use tokio::io::AsyncRead;
+use tracing::debug;
 use uuid::Uuid;
-use validator::Validate;
 
+pub mod exposed;
 pub mod instructions;
 pub mod keys_loader;
 pub mod migrator;
 pub mod storage;
 
 pub struct App {
-    storage: StorageClient,
-    instructions_builder: InstructionsBuilder,
+    pub storage: StorageClient,
+    pub instructions_builder: InstructionsBuilder,
+    pub keys: SolanaKeys,
+    pub solana_meta: DataReceiver<instructions::solana::Meta>,
 }
 
 impl App {
-    pub async fn new(storage: StorageClient, instructions_builder: InstructionsBuilder) -> Self {
-        Self {
-            storage,
-            instructions_builder,
-        }
-    }
-
     pub async fn create_project(
         &self,
         request: CreateProjectRequest,
+        streams: CreateProjectStreamData<impl AsyncRead>,
     ) -> anyhow::Result<CreateProjectResponse> {
-        request
-            .deploy_schema
-            .validate()
-            .context("validate deploy schema")?;
+        if let Some(static_pool) = &request.deploy_schema.static_pool {
+            if !self
+                .instructions_builder
+                .config
+                .allowed_launch_periods
+                .contains(&Duration::from_secs(static_pool.launch_period))
+            {
+                bail!("Invalid launch period: {}", static_pool.launch_period);
+            }
+        };
+        let deploy_schema = request.deploy_schema.try_to_stored()?;
 
-        let static_pool_keypair = if request.deploy_schema.use_static_pool {
+        let static_pool_keypair = if deploy_schema.static_pool.is_some() {
             Some(Keypair::new())
         } else {
             None
@@ -46,7 +58,7 @@ impl App {
         let project = storage::project::StoredProject {
             id: Uuid::new_v4(),
             owner: request.owner.into(),
-            deploy_schema: request.deploy_schema.clone(),
+            deploy_schema: deploy_schema.clone(),
             stage: storage::project::Stage::Created,
             static_pool_pubkey: static_pool_keypair
                 .as_ref()
@@ -54,19 +66,16 @@ impl App {
             curve_pool_keypair: None,
             created_at: chrono::Utc::now(),
         };
-        let mut builder = self.instructions_builder.for_project(&project).await?;
+        let mut builder = self.instructions_builder.for_project(&project)?;
         let mut ixs = vec![];
-        ixs.extend(builder.create_project()?);
+        ixs.extend(builder.create_project(SampleMetadata {
+            name: &request.meta.name,
+            symbol: &request.meta.symbol,
+            uri: SAMPLE_MPL_URI,
+        })?);
         if let Some(keypair) = static_pool_keypair.as_ref() {
             ixs.extend(builder.init_static_pool(keypair)?);
         }
-
-        let transaction = Transaction::new_with_payer(&ixs, Some(&request.owner));
-
-        let image = StoredTokenImage {
-            project_id: project.id,
-            image_content: request.meta.image_content,
-        };
 
         let mut tx = self.storage.serializable_tx().await?;
 
@@ -96,47 +105,108 @@ impl App {
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query!(
-            "INSERT INTO token_image VALUES ($1, $2)",
-            project.id,
-            image.image_content
-        )
-        .execute(&mut *tx)
-        .await?;
+        let mut copy_in = tx
+            .copy_in_raw(
+                "COPY token_image (project_id, image_content) FROM STDIN WITH (FORMAT text)",
+            )
+            .await?;
+        copy_in.send(project.id.to_string().as_bytes()).await?;
+        copy_in.send(b"\t".as_slice()).await?;
+        copy_in.read_from(pin!(streams.image_content)).await?;
+        copy_in.finish().await?;
 
         tx.commit().await?;
 
+        let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
+        let mut transaction = Transaction::new_with_payer(&ixs, Some(&request.owner));
+        let authority = self.keys.authority_keypair().to_keypair();
+        let mut signers = vec![&authority];
+        if let Some(keypair) = static_pool_keypair.as_ref() {
+            signers.push(keypair);
+        }
+        transaction.partial_sign(&signers, recent_blockhash);
         Ok(CreateProjectResponse {
             project_id: project.id,
             transaction,
         })
     }
-}
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateProjectRequest {
-    pub owner: Pubkey,
-    pub meta: CreateTokenMeta,
-    pub deploy_schema: DeploySchema,
-}
+    pub async fn buy(&self, request: BuyRequest) -> anyhow::Result<BuyResponse> {
+        let project = self.get_full_project(request.project_id).await?;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CreateTokenMeta {
-    pub name: String,
-    pub symbol: String,
-    pub description: String,
+        let builder = self.instructions_builder.for_project(&project)?;
+        let ixs = builder.buy(request.user, request.tokens, request.max_sol_cost)?;
+        let mut tx = Transaction::new_with_payer(&ixs, Some(&request.user));
+        let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
+        tx.partial_sign(&[&self.keys.authority_keypair()], recent_blockhash);
 
-    pub image_content: Vec<u8>,
+        Ok(BuyResponse { transaction: tx })
+    }
 
-    pub website: Option<String>,
-    pub twitter: Option<String>,
-    pub telegram: Option<String>,
-}
+    pub async fn sell(&self, request: SellRequest) -> anyhow::Result<SellResponse> {
+        let project = self.get_full_project(request.project_id).await?;
 
-#[derive(Debug, Serialize, Clone)]
-pub struct CreateProjectResponse {
-    pub project_id: Uuid,
-    #[serde(serialize_with = "serialize_tx_bs58")]
-    pub transaction: Transaction,
+        let builder = self.instructions_builder.for_project(&project)?;
+        let ixs = builder.sell(request.user, request.tokens, request.min_sol_output)?;
+        let mut tx = Transaction::new_with_payer(&ixs, Some(&request.user));
+        let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
+        tx.partial_sign(&[&self.keys.authority_keypair()], recent_blockhash);
+        Ok(SellResponse { transaction: tx })
+    }
+
+    pub async fn get_project(
+        &self,
+        request: GetProjectRequest,
+    ) -> anyhow::Result<GetProjectResponse> {
+        let stored_project = query_as!(
+            StoredProjectInfo,
+            r#"SELECT
+                project.id,
+                project.owner AS "owner: _",
+                token_meta.name,
+                token_meta.description,
+                project.stage AS "stage: _",
+                project.static_pool_pubkey AS "static_pool_pubkey?: _",
+                project.curve_pool_keypair AS "curve_pool_keypair?: _",
+                project.created_at AS "created_at: _"
+            FROM project, token_meta WHERE project.id = $1 AND token_meta.project_id = $1"#,
+            request.project_id as _,
+        )
+        .fetch_one(&self.storage.pool)
+        .await?;
+
+        let project = match PublicProject::try_from(stored_project) {
+            Ok(project) => project,
+            Err(err) => {
+                debug!(
+                    "Project {} would not be exposed: {}",
+                    request.project_id, err
+                );
+                return Ok(GetProjectResponse { project: None });
+            }
+        };
+
+        Ok(GetProjectResponse {
+            project: Some(project),
+        })
+    }
+
+    async fn get_full_project(&self, project_id: Uuid) -> anyhow::Result<StoredProject> {
+        let project = query_as!(
+            StoredProject,
+            r#"SELECT
+                id,
+                owner,
+                deploy_schema AS "deploy_schema: _",
+                stage AS "stage: _",
+                static_pool_pubkey AS "static_pool_pubkey?: _",
+                curve_pool_keypair AS "curve_pool_keypair?: _",
+                created_at
+            FROM project WHERE id = $1"#,
+            project_id as _,
+        )
+        .fetch_one(&self.storage.pool)
+        .await?;
+        Ok(project)
+    }
 }

@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                id,\n                owner,\n                deploy_schema AS \"deploy_schema: _\",\n                stage AS \"stage: _\",\n                static_pool_pubkey AS \"static_pool_pubkey?: _\",\n                curve_pool_keypair AS \"curve_pool_keypair?: _\",\n                created_at\n            FROM project WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "deploy_schema: _",
+        "type_info": {
+          "Custom": {
+            "name": "deploy_schema",
+            "kind": {
+              "Composite": [
+                [
+                  "static_pool",
+                  {
+                    "Custom": {
+                      "name": "static_pool_config",
+                      "kind": {
+                        "Composite": [
+                          [
+                            "launch_ts",
+                            "Int8"
+                          ]
+                        ]
+                      }
+                    }
+                  }
+                ],
+                [
+                  "curve_pool",
+                  {
+                    "Custom": {
+                      "name": "curve_variant",
+                      "kind": {
+                        "Enum": [
+                          "Moonzip",
+                          "Pumpfun"
+                        ]
+                      }
+                    }
+                  }
+                ],
+                [
+                  "dev_purchase",
+                  {
+                    "Custom": {
+                      "name": "balance",
+                      "kind": {
+                        "Domain": "Numeric"
+                      }
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "stage: _",
+        "type_info": {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "Confirmed",
+                "OnStaticPool",
+                "StaticPoolClosed",
+                "OnCurvePool",
+                "CurvePoolClosed",
+                "Graduated"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "static_pool_pubkey?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "curve_pool_keypair?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "89ef0cfe928b5c33602cc1855f72512d93d4265c0917e2a439e6a5f4e41ee3f8"
+}
