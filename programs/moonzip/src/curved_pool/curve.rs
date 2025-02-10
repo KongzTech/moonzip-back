@@ -179,6 +179,10 @@ impl<'a> SellCalculator<'a> {
     pub fn new(curve: &'a CurveState) -> Self {
         Self { curve }
     }
+
+    pub fn with_fee(self, fee: BasisPoints) -> impl CalcSell + 'a {
+        SellCalculatorWithFee::new(self, fee)
+    }
 }
 
 impl<'a> CalcSell for SellCalculator<'a> {

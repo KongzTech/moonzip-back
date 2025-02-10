@@ -74,11 +74,11 @@ export interface components {
   schemas: {
     BuyRequest: {
       /** Format: int64 */
-      maxSolCost?: number | null;
+      minTokenOutput?: number | null;
       /** Format: uuid */
       projectId: string;
       /** Format: int64 */
-      tokens: number;
+      sols: number;
       user: string;
     };
     BuyResponse: {

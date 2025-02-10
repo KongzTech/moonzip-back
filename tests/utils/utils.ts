@@ -19,6 +19,7 @@ import { Moonzip } from "../../target/types/moonzip";
 
 const fs = require("node:fs");
 export const MZIP_FEE = 100;
+export const MAX_FEE_BPS = 10000;
 
 export function keypairFromFile(path: string): Keypair {
   const data = fs.readFileSync(path, "utf8");
@@ -111,16 +112,18 @@ export async function tokenBalance(mint: PublicKey, owner: PublicKey) {
 }
 
 export function feeAmount(amount: BN, fee: number) {
-  const feeAmount = amount.mul(new BN(fee)).div(new BN(10000));
+  const feeAmount = amount.mul(new BN(fee)).div(new BN(MAX_FEE_BPS));
   return feeAmount;
 }
 
 export function restoreFullAmount(withAppliedFee: BN) {
-  return withAppliedFee.mul(new BN(10000)).div(new BN(10000 - MZIP_FEE));
+  return withAppliedFee
+    .mul(new BN(MAX_FEE_BPS))
+    .div(new BN(MAX_FEE_BPS - MZIP_FEE));
 }
 
 export function removeFeePart(amount: BN) {
-  return amount.mul(new BN(10000)).div(new BN(10000 + MZIP_FEE));
+  return amount.mul(new BN(MAX_FEE_BPS - MZIP_FEE)).div(new BN(MAX_FEE_BPS));
 }
 
 export function approxEquals(a: BN, b: BN, tolerance: BN = new BN(1)) {

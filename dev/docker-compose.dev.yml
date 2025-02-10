@@ -2,6 +2,8 @@ version: "3.8"
 services:
   postgres:
     image: postgres:16
+    networks:
+      - moonzip-dev
     environment:
       POSTGRES_DB: "app-db"
       POSTGRES_USER: "app-adm"
@@ -10,8 +12,6 @@ services:
     volumes:
       - postgres:/data/postgres
     restart: unless-stopped
-    ports:
-      - 15432:5432
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app-adm -d app-db"]
       interval: 5s
@@ -20,6 +20,8 @@ services:
   jito-mock:
     image: moonzip/dev:latest
     command: ["yarn", "jito-mock"]
+    networks:
+      - moonzip-dev
     environment:
       SOLANA_RPC: http://solana-test-validator:18899
     healthcheck:
@@ -29,6 +31,8 @@ services:
       retries: 5
   pinata-mock:
     image: moonzip/dev:latest
+    networks:
+      - moonzip-dev
     command: ["yarn", "pinata-mock"]
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 14001"]
@@ -37,6 +41,8 @@ services:
       retries: 5
   pumpfun-mock:
     image: moonzip/dev:latest
+    networks:
+      - moonzip-dev
     command: ["yarn", "pumpfun-mock"]
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 14002"]
@@ -46,9 +52,8 @@ services:
   solana-test-validator:
     image: moonzip/dev:latest
     command: ["bash", "./tests/utils/test_validator.sh"]
-    ports:
-      - 18899:18899
-      - 18900:18900
+    networks:
+      - moonzip-dev
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 18899"]
       interval: 5s
@@ -57,6 +62,8 @@ services:
   migration:
     image: moonzip/dev:latest
     command: ["make", "db-migrate"]
+    networks:
+      - moonzip-dev
     environment:
       DATABASE_URL: postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable
     depends_on:
@@ -69,6 +76,8 @@ services:
       DATABASE_URL: postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable
       APP_NAME: migrator
       APP_RUN_MODE: test
+    networks:
+      - moonzip-dev
     depends_on:
       migration:
         condition: service_completed_successfully
@@ -88,8 +97,8 @@ services:
       DATABASE_URL: postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable
       APP_NAME: api_server
       APP_RUN_MODE: test
-    ports:
-      - 8080:8080
+    networks:
+      - moonzip-dev
     depends_on:
       app-migrator:
         condition: service_started
@@ -97,3 +106,6 @@ services:
         condition: service_healthy
 volumes:
   postgres:
+networks:
+  moonzip-dev:
+    driver: bridge

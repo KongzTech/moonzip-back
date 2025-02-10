@@ -1,10 +1,10 @@
 use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
 use anchor_lang::{prelude::*, system_program};
 
-pub const FEE_PREFIX: &[u8] = b"fee";
+pub const FEE_ACCOUNT_PREFIX: &[u8] = b"fee";
 
 pub fn fee_address() -> Pubkey {
-    let (address, _) = Pubkey::find_program_address(&[FEE_PREFIX], &crate::ID);
+    let (address, _) = Pubkey::find_program_address(&[FEE_ACCOUNT_PREFIX], &crate::ID);
     address
 }
 
@@ -59,7 +59,7 @@ pub struct SetFeeConfigAccounts<'info> {
     #[account(
         init_if_needed,
         payer = authority,
-        space = FeeAccount::ACCOUNT_SIZE, seeds = [FEE_PREFIX], bump
+        space = FeeAccount::ACCOUNT_SIZE, seeds = [FEE_ACCOUNT_PREFIX], bump
     )]
     pub fee: Account<'info, FeeAccount>,
 
@@ -77,7 +77,7 @@ pub struct ExtractFeeAccounts<'info> {
     pub authority: Signer<'info>,
 
     #[account(mut,
-        seeds = [FEE_PREFIX], bump=fee.bump
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
     )]
     pub fee: Account<'info, FeeAccount>,
 
@@ -91,7 +91,7 @@ pub struct TakeAccountAsFeeAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
 
-    #[account(mut, seeds = [FEE_PREFIX], bump=fee.bump)]
+    #[account(mut, seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump)]
     pub fee: Account<'info, FeeAccount>,
 
     /// CHECK: only for lamports taking
@@ -117,7 +117,7 @@ impl Sizable for FeeAccount {
 
 ensure_account_size!(FeeAccount, 13);
 
-#[derive(AnchorDeserialize, AnchorSerialize, Clone, PartialEq, PartialOrd, Debug)]
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy, PartialEq, PartialOrd, Debug)]
 pub struct FeeConfig {
     pub on_buy: BasisPoints,
     pub on_sell: BasisPoints,
@@ -132,19 +132,29 @@ impl Sizable for FeeConfig {
     }
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize, Clone, PartialEq, PartialOrd, Debug)]
-pub struct BasisPoints(u16);
+#[derive(AnchorDeserialize, AnchorSerialize, Clone, Copy, PartialEq, PartialOrd, Debug)]
+pub struct BasisPoints(pub u16);
 
 impl BasisPoints {
     const MAX: u16 = 10000;
 
     pub fn part_of(&self, amount: u64) -> u64 {
-        ((amount as u128).saturating_mul(self.0 as u128) / (Self::MAX as u128)) as u64
+        (((amount as u128).saturating_mul(self.0 as u128) / (Self::MAX as u128)) as u64).max(1)
     }
 
     pub fn on_top_of(&self, amount: u64) -> u64 {
         let opposite_bps = Self::MAX - self.0;
-        (amount.saturating_mul(Self::MAX as u64) / (opposite_bps as u64)).saturating_sub(amount)
+        (amount.saturating_mul(Self::MAX as u64) / (opposite_bps as u64))
+            .saturating_sub(amount)
+            .max(1)
+    }
+
+    /// Shows how much tokens of these `amount` could really be used, if accounting for the fee.
+    /// It is for schemes, where you have X tokens, on top of it you get fee (X + X * 0.1),
+    /// and you want to know the exact X you can spend, given that total possible token amount is (X + X * 0.1)
+    pub fn accounting(&self, amount: u64) -> u64 {
+        let total_multiplier = Self::MAX + self.0;
+        amount.saturating_mul(Self::MAX as u64) / (total_multiplier as u64)
     }
 }
 

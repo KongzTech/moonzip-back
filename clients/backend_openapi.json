@@ -162,10 +162,10 @@
         "required": [
           "user",
           "projectId",
-          "tokens"
+          "sols"
         ],
         "properties": {
-          "maxSolCost": {
+          "minTokenOutput": {
             "type": [
               "integer",
               "null"
@@ -177,7 +177,7 @@
             "type": "string",
             "format": "uuid"
           },
-          "tokens": {
+          "sols": {
             "type": "integer",
             "format": "int64",
             "minimum": 0

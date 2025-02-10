@@ -15,6 +15,8 @@ import {
   getProjectAddress,
   keypairFromFile,
   mintToken,
+  removeFeePart,
+  restoreFullAmount,
   tokenBalance,
   tokenInit,
 } from "../utils/utils";
@@ -23,6 +25,7 @@ import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { expect } from "chai";
 import * as chai from "chai";
 import chaiAsPromised from "chai-as-promised";
+import { sendTransaction, signTransaction } from "../utils/helpers";
 chai.use(chaiAsPromised);
 
 function getPoolAddress(mint: PublicKey) {
@@ -58,8 +61,10 @@ describe("static pool", () => {
       minPurchaseLamports: new BN(10),
     };
 
-    const firstAmount = new BN(200);
-    const secondAmount = new BN(300);
+    const firstAmountBare = new BN(200);
+    const secondAmountBare = new BN(300);
+    const firstAmount = restoreFullAmount(firstAmountBare);
+    const secondAmount = restoreFullAmount(secondAmountBare);
     const totalAmount = firstAmount.toNumber() + secondAmount.toNumber();
 
     const mint = anchor.web3.Keypair.generate();
@@ -117,58 +122,60 @@ describe("static pool", () => {
 
     console.log("starting to purchasing from static pool");
 
-    signature = await main_program.methods
-      .buyFromStaticPool({ amount: firstAmount, projectId: { 0: randomId } })
+    let transaction = await main_program.methods
+      .buyFromStaticPool({ sols: firstAmount, projectId: { 0: randomId } })
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
         user: firstBuyer.publicKey,
         project: getProjectAddress(randomId),
       })
-      .signers([authority, firstBuyer])
-      .rpc();
-    await connection.confirmTransaction(signature);
+      .transaction();
+    await signTransaction(connection, transaction, [authority, firstBuyer]);
+    await sendTransaction(connection, transaction);
     console.log("first buyer bought");
     state = await main_program.account.staticPool.fetch(
       getPoolAddress(mint.publicKey)
     );
 
-    expect(state.collectedLamports.toNumber()).to.eql(firstAmount.toNumber());
+    expect(state.collectedLamports.toNumber()).to.eql(
+      firstAmountBare.toNumber()
+    );
     expect(state.state).to.eql({ active: {} });
 
     let token_account = await getAccount(
       connection,
       getAssociatedTokenAddressSync(mint.publicKey, firstBuyer.publicKey)
     );
-    expect(Number(token_account.amount)).to.eql(firstAmount.toNumber());
+    expect(Number(token_account.amount)).to.eql(firstAmountBare.toNumber());
 
-    signature = await main_program.methods
-      .buyFromStaticPool({ amount: secondAmount, projectId: { 0: randomId } })
+    console.log(`second buyer: would buy for ${secondAmount.toNumber()} sols`);
+
+    transaction = await main_program.methods
+      .buyFromStaticPool({ sols: secondAmount, projectId: { 0: randomId } })
       .accounts({
         authority: authority.publicKey,
         mint: mint.publicKey,
         user: secondBuyer.publicKey,
         project: getProjectAddress(randomId),
       })
-      .signers([authority, secondBuyer])
-      .rpc();
-    await connection.confirmTransaction(signature);
+      .transaction();
+
+    await signTransaction(connection, transaction, [authority, secondBuyer]);
+    await sendTransaction(connection, transaction);
     console.log("second buyer bought");
     state = await main_program.account.staticPool.fetch(poolAddress);
 
     expect(state.collectedLamports.toNumber()).to.eql(
-      firstAmount.toNumber() + secondAmount.toNumber()
+      firstAmountBare.add(secondAmountBare).toNumber()
     );
     expect(state.state).to.eql({ closed: {} });
-
-    const tokenOwner = anchor.web3.Keypair.generate();
-    await airdrop(tokenOwner.publicKey, new BN(LAMPORTS_PER_SOL));
 
     console.log("starting to graduate static pool");
     let fundsReceiver = anchor.web3.Keypair.generate();
     await airdrop(fundsReceiver.publicKey, new BN(LAMPORTS_PER_SOL));
 
-    signature = await main_program.methods
+    transaction = await main_program.methods
       .graduateStaticPool()
       .accounts({
         authority: authority.publicKey,
@@ -177,14 +184,20 @@ describe("static pool", () => {
         project: getProjectAddress(randomId),
       })
       .signers([authority])
-      .rpc();
-    await connection.confirmTransaction(signature);
+      .transaction();
+    await signTransaction(connection, transaction, [authority]);
+    await sendTransaction(connection, transaction);
     console.log("static pool graduated");
     expect(
       main_program.account.staticPool.fetch(poolAddress)
     ).to.eventually.be.rejectedWith("shit");
 
     let balance = await connection.getBalance(fundsReceiver.publicKey);
-    expect(balance).to.eql(LAMPORTS_PER_SOL + totalAmount);
+    expect(balance).to.eql(
+      new BN(LAMPORTS_PER_SOL)
+        .add(firstAmountBare)
+        .add(secondAmountBare)
+        .toNumber()
+    );
   });
 });

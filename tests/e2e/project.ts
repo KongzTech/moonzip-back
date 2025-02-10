@@ -29,7 +29,8 @@ import {
 import { getMinimumBalanceForRentExemptAccount } from "@solana/spl-token";
 
 const imagePath = "./tests/data/moon.png";
-const client = createClient<paths>({ baseUrl: "http://0.0.0.0:8080" });
+const apiHost = process.env.MOONZIP_API_HOST || "http://app-api:8080";
+const client = createClient<paths>({ baseUrl: apiHost });
 
 function sampleCreateProjectMeta(owner: Keypair, devPurchase: number) {
   const meta: components["schemas"]["CreateTokenMeta"] = {
@@ -89,16 +90,16 @@ type OperationMeta = {
 async function buyFromProject(
   projectId: string,
   user: Keypair,
-  tokens: number,
-  maxSolCost: number
+  sols: number,
+  minTokenOutput: number
 ): Promise<OperationMeta> {
   let buyResponse = await withErrorHandling(
     client.POST("/api/project/buy", {
       body: {
         projectId: projectId,
         user: user.publicKey.toBase58(),
-        tokens: tokens,
-        maxSolCost: maxSolCost,
+        sols,
+        minTokenOutput,
       },
     })
   );
@@ -213,29 +214,37 @@ describe("projects operations", () => {
     expect(project.stage).to.equal("staticPoolActive");
     expect(project.staticPoolMint).to.not.be.null;
 
-    let tokensToBuy = 10000;
-    await buyFromProject(projectResult.projectId, user, tokensToBuy, 10000000);
+    let solToSpend = LAMPORTS_PER_SOL / 100;
+    let minTokenOutput = 1_000_000;
+    await buyFromProject(
+      projectResult.projectId,
+      user,
+      solToSpend,
+      minTokenOutput
+    );
 
-    let balance = await tokenBalance(
+    let tokenBalanceAfterBuy = await tokenBalance(
       new PublicKey(project.staticPoolMint),
       user.publicKey
     );
-    expect(balance).to.be.equal(tokensToBuy);
+    expect(tokenBalanceAfterBuy).to.be.gte(minTokenOutput);
     let solBalanceAfterBuy = await connection.getBalance(user.publicKey);
 
-    let tokensToSell = 1000;
+    let tokensToSell = Math.floor(minTokenOutput / 2);
     let sellMeta = await sellToProject(
       projectResult.projectId,
       user,
       tokensToSell,
-      10000000
+      Math.floor(solToSpend / 3)
     );
 
-    balance = await tokenBalance(
+    let tokenBalanceAfterSell = await tokenBalance(
       new PublicKey(project.staticPoolMint),
       user.publicKey
     );
-    expect(balance).to.be.equal(tokensToBuy - tokensToSell);
+    expect(tokenBalanceAfterSell).to.be.equal(
+      tokenBalanceAfterBuy - tokensToSell
+    );
     let solBalanceAfterSell = await connection.getBalance(user.publicKey);
     expect(solBalanceAfterSell).to.be.greaterThan(
       solBalanceAfterBuy - sellMeta.feeEstimate
@@ -254,27 +263,28 @@ describe("projects operations", () => {
       "curvePoolActive"
     );
     let curvePoolMint = new PublicKey(project.curvePoolMint!);
-    let tokensToBuy = 1000000;
-    console.log("buying from curve pool", tokensToBuy);
+    let solsToSpend = Math.floor(LAMPORTS_PER_SOL / 3);
+    let minTokenOutput = 1_000_000;
+    console.log("buying from curve pool in sols", solsToSpend);
     await buyFromProject(
       projectResult.projectId,
       user,
-      tokensToBuy,
-      LAMPORTS_PER_SOL
+      solsToSpend,
+      minTokenOutput
     );
     let balanceAfterBuy = await connection.getBalance(user.publicKey);
-    let balance = await tokenBalance(curvePoolMint, user.publicKey);
-    expect(balance).to.be.equal(tokensToBuy);
+    let tokensAfterBuy = await tokenBalance(curvePoolMint, user.publicKey);
+    expect(tokensAfterBuy).to.be.gte(minTokenOutput);
 
-    let tokensToSell = tokensToBuy / 2;
+    let tokensToSell = Math.floor(tokensAfterBuy / 2);
     let sellMeta = await sellToProject(
       projectResult.projectId,
       user,
       tokensToSell,
       0
     );
-    balance = await tokenBalance(curvePoolMint, user.publicKey);
-    expect(balance).to.be.equal(tokensToBuy - tokensToSell);
+    let tokensAfterSell = await tokenBalance(curvePoolMint, user.publicKey);
+    expect(tokensAfterSell).to.be.equal(tokensAfterBuy - tokensToSell);
     let solBalanceAfterSell = await connection.getBalance(user.publicKey);
     expect(solBalanceAfterSell).to.be.greaterThan(
       solBalanceAfterSell - sellMeta.feeEstimate

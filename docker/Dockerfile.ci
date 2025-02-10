@@ -7,7 +7,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     apt install -y make netcat && \
     /bin/bash -c "source ~/.nvm/nvm.sh && nvm install ${NODE_VERSION} && nvm use ${NODE_VERSION} && nvm alias default node && corepack enable"
 
-RUN rustup default 1.81.0 && rustup component add rustfmt clippy && \
+RUN rustup default 1.82.0 && rustup component add rustfmt clippy && \
     cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
 ENV PATH=/app/target/release:/app/target/debug:$PATH

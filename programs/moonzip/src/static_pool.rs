@@ -3,7 +3,7 @@ use crate::{
     ensure_account_size,
     project::{ProjectId, PROJECT_PREFIX},
     utils::Sizable,
-    Project, ProjectStage, PROGRAM_AUTHORITY,
+    FeeAccount, Project, ProjectStage, FEE_ACCOUNT_PREFIX, PROGRAM_AUTHORITY,
 };
 use anchor_lang::{prelude::*, system_program};
 use anchor_spl::{
@@ -61,30 +61,31 @@ pub fn buy(ctx: Context<BuyFromStaticPoolAccounts>, data: BuyFromStaticPoolData)
     if ctx.accounts.pool.close_if_needed() {
         return err!(StaticPoolError::AlreadyClosed);
     }
+    ctx.accounts.pool.ensure_buy_allowed(data.sols)?;
 
-    let already_collected = ctx.accounts.pool.collected_lamports;
+    let sols = data.sols;
+    let fee = ctx.accounts.fee.config.on_buy.part_of(sols);
+    let sols_after_fee = sols.saturating_sub(fee);
 
-    let amount = if let Some(max_lamports) = ctx.accounts.pool.config.close_conditions.max_lamports
-    {
-        max_lamports
-            .checked_sub(already_collected)
-            .expect("invariant: overpurchase for limiting pool")
-            .min(data.amount)
-    } else {
-        data.amount
+    // If limit is set for pool, one can only retrieve up to that limit.
+    if let Some(max_lamports) = ctx.accounts.pool.config.close_conditions.max_lamports {
+        if sols_after_fee > max_lamports {
+            return err!(StaticPoolError::LimitViolated);
+        }
     };
+
     ctx.accounts.pool.collected_lamports = ctx
         .accounts
         .pool
         .collected_lamports
-        .checked_add(amount)
+        .checked_add(sols_after_fee)
         .expect("invariant: lamports amount is out of bounds");
 
     if ctx.accounts.pool.close_if_needed() {
         ctx.accounts.project.stage = ProjectStage::StaticPoolClosed;
     }
 
-    let balance_to_mint = amount.saturating_sub(ctx.accounts.pool_mint_account.amount);
+    let balance_to_mint = sols_after_fee.saturating_sub(ctx.accounts.pool_mint_account.amount);
     if balance_to_mint > 0 {
         anchor_spl::token::mint_to(
             CpiContext::new(
@@ -95,11 +96,11 @@ pub fn buy(ctx: Context<BuyFromStaticPoolAccounts>, data: BuyFromStaticPoolData)
                     authority: ctx.accounts.authority.to_account_info(),
                 },
             ),
-            amount,
+            sols_after_fee,
         )?;
     }
 
-    let owe_amount = amount.saturating_sub(balance_to_mint);
+    let owe_amount = sols_after_fee.saturating_sub(balance_to_mint);
     if owe_amount > 0 {
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
@@ -127,8 +128,11 @@ pub fn buy(ctx: Context<BuyFromStaticPoolAccounts>, data: BuyFromStaticPoolData)
                 to: ctx.accounts.pool.to_account_info(),
             },
         ),
-        amount,
+        sols,
     )?;
+
+    ctx.accounts.pool.sub_lamports(fee)?;
+    ctx.accounts.fee.add_lamports(fee)?;
 
     Ok(())
 }
@@ -138,11 +142,15 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
         return err!(StaticPoolError::AlreadyClosed);
     }
 
+    let input = data.tokens;
+    let output = data.tokens;
+    let fee = ctx.accounts.fee.config.on_sell.part_of(output);
+
     ctx.accounts.pool.collected_lamports = ctx
         .accounts
         .pool
         .collected_lamports
-        .checked_sub(data.tokens)
+        .checked_sub(output)
         .expect("invariant: lamports amount becomes negative");
 
     anchor_spl::token::transfer(
@@ -154,11 +162,12 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
                 authority: ctx.accounts.user.to_account_info(),
             },
         ),
-        data.tokens,
+        input,
     )?;
 
-    ctx.accounts.pool.sub_lamports(data.tokens)?;
-    ctx.accounts.user.add_lamports(data.tokens)?;
+    ctx.accounts.pool.sub_lamports(output)?;
+    ctx.accounts.user.add_lamports(output.saturating_sub(fee))?;
+    ctx.accounts.fee.add_lamports(fee)?;
 
     Ok(())
 }
@@ -206,6 +215,13 @@ impl StaticPool {
         } else {
             false
         }
+    }
+
+    pub fn ensure_buy_allowed(&self, lamports: u64) -> Result<()> {
+        if lamports == 0 {
+            return err!(StaticPoolError::LimitViolated);
+        }
+        Ok(())
     }
 }
 
@@ -291,7 +307,7 @@ pub struct CreateStaticPoolAccounts<'info> {
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct BuyFromStaticPoolData {
     pub project_id: ProjectId,
-    pub amount: u64,
+    pub sols: u64,
 }
 
 #[derive(Accounts)]
@@ -299,6 +315,12 @@ pub struct BuyFromStaticPoolData {
 pub struct BuyFromStaticPoolAccounts<'info> {
     #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
+    )]
+    pub fee: Account<'info, FeeAccount>,
 
     #[account(
         mut,
@@ -349,6 +371,12 @@ pub struct SellToStaticPoolData {
 pub struct SellToStaticPoolAccounts<'info> {
     #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
+    )]
+    pub fee: Account<'info, FeeAccount>,
 
     #[account(
         mut,
@@ -412,6 +440,9 @@ pub struct GraduateStaticPoolAccounts<'info> {
 
 #[error_code]
 pub enum StaticPoolError {
+    #[msg("Pool limit is violated during operation")]
+    LimitViolated,
+
     #[msg("Pool already exists for given project")]
     AlreadyCreated,
 

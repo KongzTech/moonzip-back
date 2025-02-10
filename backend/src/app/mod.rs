@@ -135,7 +135,7 @@ impl App {
         let project = self.get_full_project(request.project_id).await?;
 
         let builder = self.instructions_builder.for_project(&project)?;
-        let ixs = builder.buy(request.user, request.tokens, request.max_sol_cost)?;
+        let ixs = builder.buy(request.user, request.sols, request.min_token_output)?;
         let mut tx = Transaction::new_with_payer(&ixs, Some(&request.user));
         let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
         tx.partial_sign(&[&self.keys.authority_keypair()], recent_blockhash);

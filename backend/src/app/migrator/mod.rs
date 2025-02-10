@@ -319,7 +319,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
     }
 
     async fn init_curve_pool(&mut self) -> anyhow::Result<()> {
-        let mut initial_purchase = self
+        let dev_purchase = self
             .lock
             .project
             .deploy_schema
@@ -327,12 +327,18 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .as_ref()
             .cloned()
             .map(TryInto::try_into)
-            .transpose()?
-            .unwrap_or(0u64);
+            .transpose()?;
 
-        if self.lock.project.deploy_schema.static_pool.is_some() {
-            initial_purchase += self.chain_helper.static_pool().await?.collected_lamports;
-        }
+        let post_dev_purchase = if self.lock.project.deploy_schema.static_pool.is_some() {
+            let collected = self.chain_helper.static_pool().await?.collected_lamports;
+            if collected == 0 {
+                None
+            } else {
+                Some(collected)
+            }
+        } else {
+            None
+        };
 
         let mut ix_builder = self
             .tools
@@ -356,17 +362,20 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let token_meta = token_meta(&mut self.lock.tx, self.lock.project.id).await?;
         let curve_create = CurveCreate {
             mint: keypair.pubkey(),
-            initial_purchase: InitialPurchase {
+            dev_purchase: dev_purchase.map(|sols| InitialPurchase {
                 user: PROGRAM_AUTHORITY,
-                amount: initial_purchase,
-            },
+                sols,
+            }),
+            post_dev_purchase: post_dev_purchase.map(|sols| InitialPurchase {
+                user: PROGRAM_AUTHORITY,
+                sols,
+            }),
             metadata: token_meta,
         };
 
         match self.lock.project.deploy_schema.curve_pool {
             CurveVariant::Moonzip => {
-                let moonzip_meta = self.tools.moonzip_meta_rx.clone().get()?;
-                ixs.append(&mut ix_builder.init_moonzip_pool(curve_create, &moonzip_meta)?);
+                ixs.append(&mut ix_builder.init_moonzip_pool(curve_create)?);
             }
             CurveVariant::Pumpfun => {
                 let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get()?;

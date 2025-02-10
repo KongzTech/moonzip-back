@@ -1,6 +1,11 @@
 use anchor_lang::{prelude::Pubkey, AnchorDeserialize, AnchorSerialize};
 use pumpfun_cpi::BondingCurve;
 
+use crate::BasisPoints;
+
+pub const SELL_FEE: BasisPoints = BasisPoints(100);
+pub const BUY_FEE: BasisPoints = BasisPoints(100);
+
 pub mod seeds {
     /// Seed for the global state PDA
     pub const GLOBAL_SEED: &[u8] = b"global";
@@ -42,6 +47,14 @@ impl CurveWrapper {
             token_total_supply: global.token_total_supply,
         }
     }
+
+    pub fn commit_buy(&mut self, sols: u64, tokens: u64) {
+        self.virtual_sol_reserves += sols;
+        self.virtual_token_reserves -= tokens;
+
+        self.real_sol_reserves += sols;
+        self.virtual_sol_reserves += sols;
+    }
 }
 
 impl From<BondingCurve> for CurveWrapper {
@@ -65,11 +78,32 @@ impl<'a> BuyCalculator<'a> {
         Self { curve }
     }
 
-    pub fn fixed_sols(&self, sols: u64) -> u64 {
+    pub fn fixed_sols(&self, sols: u64) -> BuyParams {
+        let sols = BUY_FEE.accounting(sols);
+
         let constant = constant(self.curve);
         let new_token_reserves =
             constant / (self.curve.virtual_sol_reserves as u128 + sols as u128) + 1;
-        (self.curve.virtual_token_reserves as u128).saturating_sub(new_token_reserves) as u64
+        let tokens =
+            (self.curve.virtual_token_reserves as u128).saturating_sub(new_token_reserves) as u64;
+        BuyParams {
+            tokens,
+            max_sol_cost: sols,
+        }
+    }
+}
+
+pub struct BuyParams {
+    pub tokens: u64,
+    pub max_sol_cost: u64,
+}
+
+impl BuyParams {
+    pub fn as_ix_data(&self) -> pumpfun_cpi::instruction::Buy {
+        pumpfun_cpi::instruction::Buy {
+            _amount: self.tokens,
+            _max_sol_cost: self.max_sol_cost,
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-import { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import { Connection, PublicKey, Signer, Transaction } from "@solana/web3.js";
 
 export const withTimeout = <T>(millis, promise: Promise<T>): Promise<T> => {
   let timeoutPid;
@@ -64,3 +64,17 @@ export const sendTransaction = async (
   }
   throw new Error("transaction not confirmed in 10 seconds");
 };
+
+export async function signTransaction(
+  connection: Connection,
+  tx: Transaction,
+  signers: Signer[],
+  feePayer?: PublicKey
+): Promise<Transaction> {
+  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  tx.feePayer = feePayer ? feePayer : signers[0].publicKey;
+  for (let signer of signers) {
+    tx.partialSign(signer);
+  }
+  return tx;
+}

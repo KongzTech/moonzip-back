@@ -23,6 +23,7 @@ import { expect } from "chai";
 import {
   createTransferInstruction,
   getAssociatedTokenAddressSync,
+  transfer,
 } from "@solana/spl-token";
 import {
   buyFromPumpfun,
@@ -61,7 +62,6 @@ describe("transmuter", () => {
     const user = anchor.web3.Keypair.generate();
     const curveMint = anchor.web3.Keypair.generate();
     const fromMint = anchor.web3.Keypair.generate();
-    const transmuterBalance = new BN("10000000000");
     const userFromBalance = new BN("100000");
 
     await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
@@ -93,8 +93,8 @@ describe("transmuter", () => {
 
     let signature = await main_program.methods
       .buyFromCurvedPool({
-        tokens: transmuterBalance,
-        maxSolCost: new BN(1000000),
+        sols: new BN(LAMPORTS_PER_SOL),
+        minTokenOutput: new BN(0),
         projectId: { 0: randomId },
       })
       .accounts({
@@ -106,7 +106,7 @@ describe("transmuter", () => {
       .signers([authority])
       .rpc();
     await connection.confirmTransaction(signature);
-    console.log("bought from curved pool for authority");
+    console.log(`bought from curved pool for authority`);
 
     signature = await main_program.methods
       .initTransmuterForCurve()

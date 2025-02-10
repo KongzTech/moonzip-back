@@ -187,8 +187,8 @@ pub struct BuyRequest {
     #[schema(value_type = String)]
     pub user: Pubkey,
     pub project_id: Uuid,
-    pub tokens: u64,
-    pub max_sol_cost: Option<u64>,
+    pub sols: u64,
+    pub min_token_output: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Clone, ToSchema)]

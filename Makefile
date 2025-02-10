@@ -58,7 +58,7 @@ test-env:
 
 .PHONY: e2e-test
 e2e-test:
-	docker run --net=host -t moonzip/dev:latest make e2e-test-exec
+	docker run --net=dev_moonzip-dev -e MOONZIP_API_HOST="http://app-api:8080" -t moonzip/dev:latest make e2e-test-exec
 
 .PHONY: e2e-test-exec
 e2e-test-exec:
@@ -68,7 +68,7 @@ e2e-test-exec:
 
 .PHONY: program-test
 program-test:
-	docker run --net=host -t moonzip/dev:latest make program-test-exec
+	docker run --net=dev_moonzip-dev -e MOONZIP_API_HOST="http://app-api:8080" -t moonzip/dev:latest make program-test-exec
 
 .PHONY: program-test-exec
 program-test-exec:

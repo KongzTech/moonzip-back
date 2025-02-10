@@ -1,6 +1,6 @@
 use crate::{
     ensure_account_size,
-    fee::{take_fee, FeeAccount, FEE_PREFIX},
+    fee::{take_fee, FeeAccount, FEE_ACCOUNT_PREFIX},
     utils::Sizable,
     Project, ProjectId, ProjectStage, PROGRAM_AUTHORITY, PROJECT_PREFIX,
 };
@@ -73,19 +73,20 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
     if ctx.accounts.pool.status == CurvedPoolStatus::Closed {
         return err!(CurvedPoolError::AlreadyClosed);
     }
-
-    let sols = BuyCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
+    let sols = data.sols;
     let fee = ctx.accounts.fee.config.on_buy.part_of(sols);
-    let with_fee = sols.saturating_sub(fee);
+    let after_fee = sols.saturating_sub(fee);
 
-    if with_fee > data.max_sol_cost {
+    let tokens = BuyCalculator::new(&ctx.accounts.pool.curve).fixed_sols(after_fee);
+
+    if tokens < data.min_token_output {
         return err!(CurvedPoolError::SlippageFailure);
     }
-    if !ctx.accounts.pool.buy_allowed(with_fee, data.tokens) {
+    if !ctx.accounts.pool.buy_allowed(after_fee, tokens) {
         return err!(CurvedPoolError::OperationDisallowed);
     }
 
-    ctx.accounts.pool.curve.commit_buy(sols, data.tokens);
+    ctx.accounts.pool.curve.commit_buy(after_fee, tokens);
 
     if ctx.accounts.pool.close_if_needed() {
         ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
@@ -103,7 +104,7 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
             },
             &[&[CURVED_POOL_PREFIX, ctx.accounts.mint.key().as_ref(), bump]],
         ),
-        data.tokens,
+        tokens,
     )?;
 
     system_program::transfer(
@@ -114,7 +115,7 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
                 to: ctx.accounts.pool.to_account_info(),
             },
         ),
-        sols,
+        after_fee,
     )?;
 
     take_fee(
@@ -220,7 +221,7 @@ impl CurvedPool {
         }
 
         // order limit must be disabled for the last tokens
-        if tokens <= self.tokens_to_close() {
+        if tokens <= self.curve.token_balance() {
             return true;
         }
 
@@ -324,8 +325,8 @@ pub struct CreateCurvedPoolAccounts<'info> {
 #[derive(AnchorSerialize, AnchorDeserialize, Default, Debug)]
 pub struct BuyFromCurvedPoolData {
     pub project_id: ProjectId,
-    pub tokens: u64,
-    pub max_sol_cost: u64,
+    pub sols: u64,
+    pub min_token_output: u64,
 }
 
 #[derive(Accounts)]
@@ -336,7 +337,7 @@ pub struct BuyFromCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
-        seeds = [FEE_PREFIX], bump=fee.bump
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
     )]
     pub fee: Account<'info, FeeAccount>,
 
@@ -393,7 +394,7 @@ pub struct SellFromCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
-        seeds = [FEE_PREFIX], bump=fee.bump
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
     )]
     pub fee: Account<'info, FeeAccount>,
 
@@ -441,7 +442,7 @@ pub struct GraduateCurvedPoolAccounts<'info> {
 
     #[account(
         mut,
-        seeds = [FEE_PREFIX], bump=fee.bump
+        seeds = [FEE_ACCOUNT_PREFIX], bump=fee.bump
     )]
     pub fee: Account<'info, FeeAccount>,
 

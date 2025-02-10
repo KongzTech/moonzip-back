@@ -92,14 +92,13 @@ describe("curved pool", () => {
     const user = anchor.web3.Keypair.generate();
     const curveConfig = pumpfunLikeConfig();
 
-    const buyAmount = new BN(100000000);
-    const sellAmount = new BN(80000000);
     const poolMint = anchor.web3.Keypair.generate();
 
     await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
+    await airdrop(creator.publicKey, new BN(LAMPORTS_PER_SOL));
 
     let randomId = new BN(Math.floor(Math.random() * 100000).toString());
-    await createProject(user, randomId, {
+    await createProject(creator, randomId, {
       useStaticPool: false,
       curvePool: {
         moonzip: {},
@@ -133,10 +132,11 @@ describe("curved pool", () => {
     );
 
     const preBuyBalance = await connection.getBalance(user.publicKey);
+    let solToSpend = new BN(100000);
     let signature = await main_program.methods
       .buyFromCurvedPool({
-        tokens: buyAmount,
-        maxSolCost: new BN(100000),
+        sols: solToSpend,
+        minTokenOutput: new BN(0),
         projectId: { 0: randomId },
       })
       .accounts({
@@ -150,16 +150,16 @@ describe("curved pool", () => {
     await connection.confirmTransaction(signature);
     const solsLost =
       preBuyBalance - (await connection.getBalance(user.publicKey));
-    expect(solsLost).to.gt(0);
-    const actualSolAmount =
-      solsLost - (await getMinimumBalanceForRentExemptAccount(connection));
+    expect(solsLost).to.gt(solToSpend.toNumber());
+    const tokensGained = new BN(
+      await tokenBalance(poolMint.publicKey, user.publicKey)
+    );
 
     state = await main_program.account.curvedPool.fetch(poolAddress);
     let expectedState = {
-      realTokenReserves: curveConfig.curve.initialRealTokenReserves.sub(
-        new BN(buyAmount)
-      ),
-      realSolReserves: removeFeePart(new BN(actualSolAmount)),
+      realTokenReserves:
+        curveConfig.curve.initialRealTokenReserves.sub(tokensGained),
+      realSolReserves: removeFeePart(new BN(solToSpend)),
       totalTokenSupply: curveConfig.curve.totalTokenSupply,
     };
 
@@ -173,7 +173,8 @@ describe("curved pool", () => {
 
     const preSellBalance = await connection.getBalance(user.publicKey);
 
-    console.log("starting to selling back to pool");
+    let sellAmount = new BN(Math.floor(tokensGained.toNumber() / 2));
+    console.log("starting to selling back to pool", sellAmount);
     signature = await main_program.methods
       .sellFromCurvedPool({
         projectId: { 0: randomId },
@@ -199,7 +200,7 @@ describe("curved pool", () => {
       poolMint.publicKey,
       user.publicKey
     );
-    expect(finalTokenBalance).to.eql(buyAmount.sub(sellAmount).toNumber());
+    expect(finalTokenBalance).to.eql(tokensGained.sub(sellAmount).toNumber());
 
     state = await main_program.account.curvedPool.fetch(poolAddress);
     expectedState.realTokenReserves = expectedState.realTokenReserves.add(
@@ -215,7 +216,9 @@ describe("curved pool", () => {
     expect(state.curve.realTokenReserves.toNumber()).to.eql(
       expectedState.realTokenReserves.toNumber()
     );
-    approxEquals(state.curve.realSolReserves, expectedState.realSolReserves);
+    expect(state.curve.realSolReserves.toNumber()).to.eql(
+      expectedState.realSolReserves.toNumber()
+    );
     expect(state.curve.totalTokenSupply.toNumber()).to.eql(
       expectedState.totalTokenSupply.toNumber()
     );
