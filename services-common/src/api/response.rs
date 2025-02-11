@@ -37,6 +37,8 @@ pub enum ApiError {
     /// Request is logically invalid - check e.g. params matching.
     #[error("request is invalid: {}", .0)]
     InvalidRequest(anyhow::Error),
+    #[error("captcha is invalid: {}", .0)]
+    InvalidCaptcha(anyhow::Error),
 }
 
 impl ApiError {
@@ -45,6 +47,7 @@ impl ApiError {
             ApiError::Internal(_) => 1,
             ApiError::JsonRejection(_) => 2,
             ApiError::InvalidRequest(_) => 3,
+            ApiError::InvalidCaptcha(_) => 4,
         }
     }
 }
@@ -99,6 +102,7 @@ impl IntoResponse for ApiError {
             }
             ApiError::JsonRejection(rejection) => (rejection.status(), rejection.body_text()),
             ApiError::InvalidRequest(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::InvalidCaptcha(err) => (StatusCode::BAD_REQUEST, err.to_string()),
         };
 
         (status, AppJson(ErrorResponse { message, code })).into_response()

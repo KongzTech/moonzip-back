@@ -1,8 +1,7 @@
-use std::sync::Arc;
-
-use super::auth;
 use super::auth::provider::{AuthConfig, AuthProvider};
 use super::response::{ApiError, AppJson};
+use super::{auth, captcha};
+use crate::api::captcha::provider::{CaptchaConfig, CaptchaProvider};
 use axum::{
     extract::{MatchedPath, Request},
     routing::{get, post},
@@ -10,6 +9,7 @@ use axum::{
 };
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::task::JoinSet;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -29,6 +29,8 @@ pub struct ApiConfig {
     pub admin_listen: ListenConfig,
 
     pub auth: AuthConfig,
+
+    pub captcha: CaptchaConfig,
 }
 
 #[derive(Deserialize, Debug, Clone, serde_derive_default::Default)]
@@ -67,6 +69,7 @@ pub fn expose_docs_default() -> bool {
 pub struct AppState<T> {
     app: Arc<T>,
     auth: Arc<AuthProvider>,
+    pub captcha: Arc<CaptchaProvider>,
     config: Arc<ApiConfig>,
 }
 
@@ -76,6 +79,7 @@ impl<T> Clone for AppState<T> {
             app: self.app.clone(),
             auth: self.auth.clone(),
             config: self.config.clone(),
+            captcha: self.captcha.clone(),
         }
     }
 }
@@ -85,6 +89,7 @@ impl<T> AppState<T> {
         Self {
             app,
             auth: Arc::new(AuthProvider::from_cfg(config.auth.clone())),
+            captcha: Arc::new(CaptchaProvider::from_cfg(config.captcha.clone())),
             config: Arc::new(config),
         }
     }
@@ -105,6 +110,16 @@ impl<T> auth::ConfigProvider for AppState<T> {
 
     fn token_ttl(&self) -> std::time::Duration {
         self.auth.token_ttl
+    }
+}
+
+impl<T> captcha::CaptchaProvider for AppState<T> {
+    fn secret_key(&self) -> &String {
+        &self.config.captcha.secret_key
+    }
+
+    fn enable_verify(&self) -> bool {
+        self.config.captcha.enable_verify
     }
 }
 

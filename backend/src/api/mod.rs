@@ -12,6 +12,7 @@ use axum::{
     Json, Router,
 };
 use futures_util::TryStreamExt;
+use services_common::api::captcha::Captcha;
 use services_common::api::response::{ApiError, AppJson, ErrorResponse};
 use tokio_util::io::StreamReader;
 use utoipa::OpenApi;
@@ -49,6 +50,7 @@ pub fn router() -> Router<BackendState> {
 )]
 pub async fn create_project(
     State(state): State<BackendState>,
+    _captcha: Captcha,
     mut multipart: Multipart,
 ) -> Result<AppJson<CreateProjectResponse>, ApiError> {
     let request = multipart
@@ -89,6 +91,7 @@ pub async fn create_project(
 )]
 pub async fn buy(
     State(state): State<BackendState>,
+    _captcha: Captcha,
     Json(request): Json<BuyRequest>,
 ) -> Result<AppJson<BuyResponse>, ApiError> {
     Ok(AppJson(state.app().buy(request).await?))
@@ -105,6 +108,7 @@ pub async fn buy(
 )]
 pub async fn sell(
     State(state): State<BackendState>,
+    _captcha: Captcha,
     Json(request): Json<SellRequest>,
 ) -> Result<AppJson<SellResponse>, ApiError> {
     Ok(AppJson(state.app().sell(request).await?))

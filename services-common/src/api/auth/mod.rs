@@ -97,6 +97,9 @@ pub enum Error {
 
     #[error("passed token is malformed")]
     MalformedToken,
+
+    #[error("Missing captcha")]
+    MissingCaptcha,
 }
 
 impl From<Error> for Rejection {
@@ -106,6 +109,7 @@ impl From<Error> for Rejection {
             Error::InvalidHeaders => 4031,
             Error::MalformedToken => 4032,
             Error::SignatureMismatch => 4033,
+            Error::MissingCaptcha => 4034,
         };
 
         (
