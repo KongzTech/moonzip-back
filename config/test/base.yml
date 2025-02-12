@@ -26,3 +26,7 @@ fetchers:
 instructions:
   allowed_launch_periods:
     - 10
+  allowed_lock_periods:
+    - type: disabled
+    - type: interval
+      interval: 5

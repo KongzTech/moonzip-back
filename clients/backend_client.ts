@@ -20,6 +20,22 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/project/claim_dev_lock": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post: operations["claim_dev_lock"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/project/create": {
     parameters: {
       query?: never;
@@ -111,9 +127,31 @@ export interface components {
     CurveVariant: "moonzip" | "pumpfun";
     DeploySchema: {
       curvePool: components["schemas"]["CurveVariant"];
-      /** Format: int64 */
-      devPurchase?: number | null;
+      devPurchase?: null | components["schemas"]["DevPurchase"];
       staticPool?: null | components["schemas"]["StaticPoolSchema"];
+    };
+    DevLockClaimRequest: {
+      /** Format: uuid */
+      projectId: string;
+    };
+    DevLockClaimResponse: {
+      transaction: string;
+    };
+    DevLockPeriod:
+      | {
+          /** @enum {string} */
+          type: "disabled";
+        }
+      | {
+          /** Format: int64 */
+          interval: number;
+          /** @enum {string} */
+          type: "interval";
+        };
+    DevPurchase: {
+      lock: components["schemas"]["DevLockPeriod"];
+      /** Format: int64 */
+      value: number;
     };
     GetProjectRequest: {
       /** Format: uuid */
@@ -126,6 +164,7 @@ export interface components {
       createdAt: string;
       curvePoolMint?: string | null;
       description: string;
+      devLockBase?: string | null;
       /** Format: uuid */
       id: string;
       name: string;
@@ -189,6 +228,44 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["BuyResponse"];
+        };
+      };
+      /** @description Logical error due to user input */
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Internal server error, contact support */
+      "5XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  claim_dev_lock: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DevLockClaimRequest"];
+      };
+    };
+    responses: {
+      /** @description Provided transaction to claim dev tokens */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DevLockClaimResponse"];
         };
       };
       /** @description Logical error due to user input */

@@ -1,3 +1,5 @@
+use crate::app::exposed::{DevLockPeriod, DevPurchase};
+
 use super::misc::{Balance, StoredKeypair, StoredPubkey};
 use bytes::Bytes;
 use chrono::DateTime;
@@ -23,6 +25,7 @@ pub struct StoredProject {
     pub stage: Stage,
     pub static_pool_pubkey: Option<StoredPubkey>,
     pub curve_pool_keypair: Option<StoredKeypair>,
+    pub dev_lock_keypair: Option<StoredKeypair>,
     pub created_at: DateTime<TZ>,
 }
 
@@ -108,11 +111,38 @@ pub struct StoredStaticPoolConfig {
 }
 
 #[derive(Debug, Clone, sqlx::Type)]
+#[sqlx(type_name = "dev_purchase")]
+pub struct StoredDevPurchase {
+    pub amount: Balance,
+    pub lock_period: i64,
+}
+
+impl From<DevPurchase> for StoredDevPurchase {
+    fn from(purchase: DevPurchase) -> Self {
+        Self {
+            amount: purchase.value.into(),
+            lock_period: purchase.lock.as_secs() as i64,
+        }
+    }
+}
+
+impl TryFrom<StoredDevPurchase> for DevPurchase {
+    type Error = anyhow::Error;
+
+    fn try_from(purchase: StoredDevPurchase) -> Result<Self, Self::Error> {
+        Ok(Self {
+            value: purchase.amount.try_into()?,
+            lock: DevLockPeriod::from_secs(purchase.lock_period as u64),
+        })
+    }
+}
+
+#[derive(Debug, Clone, sqlx::Type)]
 #[sqlx(type_name = "deploy_schema")]
 pub struct StoredDeploySchema {
     pub static_pool: Option<StoredStaticPoolConfig>,
     pub curve_pool: CurveVariant,
-    pub dev_purchase: Option<Balance>,
+    pub dev_purchase: Option<StoredDevPurchase>,
 }
 
 impl StoredDeploySchema {

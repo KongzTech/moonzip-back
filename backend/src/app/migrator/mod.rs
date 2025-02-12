@@ -1,8 +1,5 @@
 use super::{
-    instructions::{
-        mzip, pumpfun, solana, CurveCreate, InitialPurchase, InstructionsBuilder,
-        TransmuterInitArgs,
-    },
+    instructions::{mzip, pumpfun, CurveCreate, InitialPurchase, InstructionsBuilder},
     storage::{
         project::{self, project_id, CurveVariant, ImageStream, ProjectId, StoredTokenMeta},
         DBTransaction, StorageClient, DB,
@@ -18,6 +15,7 @@ use moonzip::{
     project::project_address,
     PROGRAM_AUTHORITY,
 };
+use rust_decimal::prelude::Zero;
 use serde::{Deserialize, Serialize};
 use services_common::{
     solana::{jito, pool::SolanaPool},
@@ -64,26 +62,11 @@ impl Migrator {
 
     pub async fn serve(
         solana_pool: SolanaPool,
-        solana_meta: DataReceiver<solana::Meta>,
         solana_keys: SolanaKeys,
         storage: StorageClient,
         instructions_builder: InstructionsBuilder,
         config: MigratorConfig,
     ) -> anyhow::Result<JoinHandle<()>> {
-        let pumpfun_meta_rx = PeriodicFetcher::new(
-            pumpfun::MetaFetcher {
-                pool: solana_pool.clone(),
-            },
-            PeriodicFetcherConfig::every_hour(),
-        )
-        .serve();
-        let moonzip_meta_rx = PeriodicFetcher::new(
-            mzip::MetaFetcher {
-                pool: solana_pool.clone(),
-            },
-            PeriodicFetcherConfig::every_hour(),
-        )
-        .serve();
         let jito_meta_rx = PeriodicFetcher::new(
             jito::JitoTipStateFetcher::default(),
             PeriodicFetcherConfig::zero(),
@@ -99,14 +82,14 @@ impl Migrator {
             internal: Arc::new(ToolsInternal {
                 solana_pool: solana_pool.clone(),
                 storage: storage.clone(),
-                pumpfun_meta_rx: pumpfun_meta_rx.clone(),
-                moonzip_meta_rx: moonzip_meta_rx.clone(),
+                pumpfun_meta_rx: instructions_builder.pump_meta.clone(),
+                moonzip_meta_rx: instructions_builder.mzip_meta.clone(),
                 jito_meta_rx: jito_meta_rx.clone(),
                 mzip_ipfs,
                 pumpfun_ipfs,
                 tx_executor: TxExecutor::new(
                     solana_pool.clone(),
-                    solana_meta.clone(),
+                    instructions_builder.solana_meta.clone(),
                     config.tx_exec,
                 ),
                 solana_keys,
@@ -147,6 +130,7 @@ impl Migrator {
                 stage AS "stage: _",
                 static_pool_pubkey AS "static_pool_pubkey?: _",
                 curve_pool_keypair AS "curve_pool_keypair?: _",
+                dev_lock_keypair AS "dev_lock_keypair?: _",
                 created_at
             FROM project WHERE stage != $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3"#,
             project::Stage::Graduated as _,
@@ -326,7 +310,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .dev_purchase
             .as_ref()
             .cloned()
-            .map(TryInto::try_into)
+            .map(|purchase| purchase.amount.try_into())
             .transpose()?;
 
         let post_dev_purchase = if self.lock.project.deploy_schema.static_pool.is_some() {
@@ -344,13 +328,13 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .tools
             .instructions_builder
             .for_project(&self.lock.project)?;
-        let mut ixs = ix_builder.lock_project()?;
+        let mut first_tx = ix_builder.lock_project()?;
 
         if self.lock.project.deploy_schema.static_pool.is_some() {
-            ixs.append(&mut ix_builder.graduate_static_pool()?);
+            first_tx.append(&mut ix_builder.graduate_static_pool()?);
         }
 
-        let keypair = self
+        let curve_mint_keypair = self
             .lock
             .project
             .curve_pool_keypair
@@ -359,9 +343,24 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .ok_or_else(|| {
                 anyhow::anyhow!("invariant: curve pool secret key is not already stored")
             })?;
+        let dev_lock_keypair = self
+            .lock
+            .project
+            .dev_lock_keypair
+            .as_ref()
+            .map(|keypair| keypair.to_keypair());
+        let should_lock = self
+            .lock
+            .project
+            .deploy_schema
+            .dev_purchase
+            .as_ref()
+            .map(|purchase| !purchase.lock_period.is_zero())
+            .unwrap_or(false);
+
         let token_meta = token_meta(&mut self.lock.tx, self.lock.project.id).await?;
         let curve_create = CurveCreate {
-            mint: keypair.pubkey(),
+            mint: curve_mint_keypair.pubkey(),
             dev_purchase: dev_purchase.map(|sols| InitialPurchase {
                 user: PROGRAM_AUTHORITY,
                 sols,
@@ -375,48 +374,60 @@ impl<'a, 'b> Deployer<'a, 'b> {
 
         match self.lock.project.deploy_schema.curve_pool {
             CurveVariant::Moonzip => {
-                ixs.append(&mut ix_builder.init_moonzip_pool(curve_create)?);
+                first_tx.append(&mut ix_builder.init_moonzip_pool(curve_create)?);
             }
             CurveVariant::Pumpfun => {
                 let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get()?;
-                ixs.append(&mut ix_builder.init_pumpfun_pool(curve_create, pumpfun_meta)?);
+                first_tx.append(&mut ix_builder.init_pumpfun_pool(curve_create, pumpfun_meta)?);
             }
         };
 
-        if self.lock.project.deploy_schema.static_pool.is_some() {
-            let static_pool_mint = self.lock.project.static_pool_mint().ok_or_else(|| {
-                anyhow::anyhow!("invariant: static pool mint is not already stored")
-            })?;
-            ixs.append(&mut match self.lock.project.deploy_schema.curve_pool {
-                CurveVariant::Moonzip => {
-                    ix_builder.add_transmuter_for_moonzip(TransmuterInitArgs {
-                        from_mint: static_pool_mint,
-                        to_mint: keypair.pubkey(),
-                        donor: PROGRAM_AUTHORITY,
-                    })?
-                }
-                CurveVariant::Pumpfun => {
-                    ix_builder.add_transmuter_for_pumpfun(TransmuterInitArgs {
-                        from_mint: static_pool_mint,
-                        to_mint: keypair.pubkey(),
-                        donor: PROGRAM_AUTHORITY,
-                    })?
-                }
-            })
-        };
+        // No need to lock, deliver tokens straight to the user.
+        if dev_purchase.is_some() && !should_lock {
+            first_tx.append(&mut ix_builder.deliver_dev_tokens()?);
+            first_tx.append(&mut ix_builder.init_transmuter()?);
+        }
 
-        ixs.append(&mut ix_builder.unlock_project()?);
-        self.tools
-            .tx_executor
-            .execute_single(TransactionRequest {
+        first_tx.append(&mut ix_builder.unlock_project()?);
+        let mut txs = vec![TransactionRequest {
+            instructions: first_tx,
+            signers: vec![
+                self.tools.solana_keys.authority_keypair().to_keypair(),
+                curve_mint_keypair,
+            ],
+            payer: self.tools.solana_keys.authority_keypair().to_keypair(),
+        }];
+
+        // We need to lock, it's a heavyweight so add separate tx for that.
+        if dev_purchase.is_some() && should_lock {
+            let dev_lock_keypair = dev_lock_keypair.ok_or_else(|| {
+                anyhow::anyhow!("invariant: no dev lock keypair, but need to lock")
+            })?;
+
+            let mut ixs = vec![];
+            ixs.append(&mut ix_builder.lock_project()?);
+            ixs.append(&mut ix_builder.lock_dev()?);
+            ixs.append(&mut ix_builder.init_transmuter()?);
+            ixs.append(&mut ix_builder.unlock_project()?);
+
+            txs.push(TransactionRequest {
                 instructions: ixs,
                 signers: vec![
                     self.tools.solana_keys.authority_keypair().to_keypair(),
-                    keypair,
+                    dev_lock_keypair,
                 ],
                 payer: self.tools.solana_keys.authority_keypair().to_keypair(),
             })
-            .await?;
+        }
+
+        if txs.len() == 1 {
+            self.tools
+                .tx_executor
+                .execute_single(txs.into_iter().next().unwrap())
+                .await?;
+        } else {
+            self.tools.tx_executor.execute_batch(txs).await?;
+        }
 
         Ok(())
     }
@@ -651,6 +662,7 @@ impl Tools {
                 stage AS "stage: _",
                 static_pool_pubkey AS "static_pool_pubkey?: _",
                 curve_pool_keypair AS "curve_pool_keypair?: _",
+                dev_lock_keypair AS "dev_lock_keypair?: _",
                 created_at
             FROM project WHERE id = $1 FOR UPDATE NOWAIT"#,
             project_id as _,

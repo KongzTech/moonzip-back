@@ -23,10 +23,15 @@ CREATE TYPE static_pool_config AS (
     launch_ts bigint
 );
 
+CREATE TYPE dev_purchase AS (
+    amount balance,
+    lock_period bigint
+);
+
 CREATE TYPE deploy_schema AS (
     static_pool static_pool_config,
     curve_pool curve_variant,
-    dev_purchase balance
+    dev_purchase dev_purchase
 );
 
 -- Create domain type for Solana public key
@@ -52,6 +57,7 @@ CREATE TABLE project (
     stage project_stage NOT NULL DEFAULT 'Created',
     static_pool_pubkey pubkey,
     curve_pool_keypair keypair,
+    dev_lock_keypair keypair,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

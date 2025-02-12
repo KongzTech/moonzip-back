@@ -1,6 +1,6 @@
 use backend::{
     app::{
-        instructions::{self, InstructionsBuilder, InstructionsConfig},
+        instructions::{self, mzip, pumpfun, InstructionsBuilder, InstructionsConfig},
         keys_loader::{self, KeysLoader},
         migrator::{Migrator, MigratorConfig},
         storage::{StorageClient, StorageConfig},
@@ -13,7 +13,7 @@ use serde::Deserialize;
 use services_common::{
     cfg::load_config,
     solana::pool::{SolanaPool, SolanaPoolConfig},
-    utils::period_fetch::PeriodicFetcher,
+    utils::period_fetch::{PeriodicFetcher, PeriodicFetcherConfig},
 };
 
 #[derive(Deserialize, Debug, Clone)]
@@ -42,16 +42,31 @@ pub async fn main() -> anyhow::Result<()> {
         cfg.fetchers.solana_meta,
     )
     .serve();
+    let pump_meta = PeriodicFetcher::new(
+        pumpfun::MetaFetcher {
+            pool: solana_pool.clone(),
+        },
+        PeriodicFetcherConfig::every_hour(),
+    )
+    .serve();
+    let mzip_meta = PeriodicFetcher::new(
+        mzip::MetaFetcher {
+            pool: solana_pool.clone(),
+        },
+        PeriodicFetcherConfig::every_hour(),
+    )
+    .serve();
 
     let instructions_builder = InstructionsBuilder {
         solana_pool: solana_pool.clone(),
         solana_meta: solana_meta.clone(),
+        pump_meta,
+        mzip_meta,
         config: cfg.instructions.into(),
     };
 
     let handle = Migrator::serve(
         solana_pool.clone(),
-        solana_meta.clone(),
         keys.clone(),
         storage_client.clone(),
         instructions_builder.clone(),

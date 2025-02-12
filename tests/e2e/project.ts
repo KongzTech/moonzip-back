@@ -12,6 +12,8 @@ import { expect } from "chai";
 import {
   airdrop,
   beforeAll,
+  devLockEscrow,
+  expectNoATA,
   getProvider,
   provideGlobalConfig,
   tokenBalance,
@@ -21,33 +23,36 @@ import fs from "fs";
 import createClient from "openapi-fetch";
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 import {
+  currentTS,
   delay,
   sendTransaction,
+  time,
+  waitForOk,
+  waitOnClusterTime,
   withErrorHandling,
   withTimeout,
 } from "../utils/helpers";
-import { getMinimumBalanceForRentExemptAccount } from "@solana/spl-token";
+import {
+  getAssociatedTokenAddressSync,
+  getMinimumBalanceForRentExemptAccount,
+} from "@solana/spl-token";
 
 const imagePath = "./tests/data/moon.png";
 const apiHost = process.env.MOONZIP_API_HOST || "http://app-api:8080";
 const client = createClient<paths>({ baseUrl: apiHost });
 
-function sampleCreateProjectMeta(owner: Keypair, devPurchase: number) {
+function sampleCreateProjectMeta(
+  owner: Keypair,
+  deploySchema: components["schemas"]["DeploySchema"]
+) {
   const meta: components["schemas"]["CreateTokenMeta"] = {
     symbol: "TEST",
     description: "some small token test description",
     name: "TEST",
   };
-  const schema: components["schemas"]["DeploySchema"] = {
-    curvePool: "moonzip",
-    staticPool: {
-      launchPeriod: 10,
-    },
-    devPurchase: devPurchase,
-  };
 
   const request_meta: components["schemas"]["CreateProjectRequest"] = {
-    deploySchema: schema,
+    deploySchema,
     meta: meta,
     owner: owner.publicKey.toBase58(),
   };
@@ -149,11 +154,6 @@ async function sellToProject(
   };
 }
 
-function time() {
-  const nanos = process.hrtime.bigint();
-  return Number(nanos / 1_000_000n);
-}
-
 async function waitForProject(
   projectId: string,
   stage?: components["schemas"]["PublicProjectStage"]
@@ -187,110 +187,249 @@ async function waitForProject(
   throw new Error("project is not ready in 30 seconds");
 }
 
-describe("projects operations", () => {
-  anchor.setProvider(anchor.AnchorProvider.env());
-  before(beforeAll);
+async function testBuySellStaticPool(
+  curve: components["schemas"]["CurveVariant"]
+) {
   let _provider = getProvider();
   let connection = _provider.connection;
 
-  it("create buy sell from static pool project", async () => {
-    const owner = anchor.web3.Keypair.generate();
-    const user = anchor.web3.Keypair.generate();
+  const schema: components["schemas"]["DeploySchema"] = {
+    curvePool: curve,
+    staticPool: {
+      launchPeriod: 10,
+    },
+    devPurchase: {
+      lock: { type: "disabled" },
+      value: LAMPORTS_PER_SOL,
+    },
+  };
 
-    console.log("for owner", owner.publicKey.toBase58());
-    await airdrop(owner.publicKey, new BN(LAMPORTS_PER_SOL * 1.2));
-    await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
-    let projectMeta = sampleCreateProjectMeta(owner, LAMPORTS_PER_SOL);
-    let projectResult = await createProject(owner, projectMeta);
+  const owner = anchor.web3.Keypair.generate();
+  const user = anchor.web3.Keypair.generate();
 
-    let project = await waitForProject(
-      projectResult.projectId,
-      "staticPoolActive"
-    );
+  console.log("for owner", owner.publicKey.toBase58());
+  await airdrop(owner.publicKey, new BN(LAMPORTS_PER_SOL * 1.2));
+  await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
+  let projectMeta = sampleCreateProjectMeta(owner, schema);
+  let projectResult = await createProject(owner, projectMeta);
 
-    expect(project.name).to.equal(projectMeta.meta.name);
-    expect(project.description).to.equal(projectMeta.meta.description);
-    expect(project.owner).to.equal(owner.publicKey.toBase58());
-    expect(project.stage).to.equal("staticPoolActive");
-    expect(project.staticPoolMint).to.not.be.null;
+  let project = await waitForProject(
+    projectResult.projectId,
+    "staticPoolActive"
+  );
 
-    let solToSpend = LAMPORTS_PER_SOL / 100;
-    let minTokenOutput = 1_000_000;
-    await buyFromProject(
-      projectResult.projectId,
-      user,
-      solToSpend,
-      minTokenOutput
-    );
+  expect(project.name).to.equal(projectMeta.meta.name);
+  expect(project.description).to.equal(projectMeta.meta.description);
+  expect(project.owner).to.equal(owner.publicKey.toBase58());
+  expect(project.stage).to.equal("staticPoolActive");
+  expect(project.staticPoolMint).to.not.be.null;
 
-    let tokenBalanceAfterBuy = await tokenBalance(
-      new PublicKey(project.staticPoolMint),
-      user.publicKey
-    );
-    expect(tokenBalanceAfterBuy).to.be.gte(minTokenOutput);
-    let solBalanceAfterBuy = await connection.getBalance(user.publicKey);
+  let solToSpend = LAMPORTS_PER_SOL / 100;
+  let minTokenOutput = 1_000_000;
+  await buyFromProject(
+    projectResult.projectId,
+    user,
+    solToSpend,
+    minTokenOutput
+  );
 
-    let tokensToSell = Math.floor(minTokenOutput / 2);
-    let sellMeta = await sellToProject(
-      projectResult.projectId,
-      user,
-      tokensToSell,
-      Math.floor(solToSpend / 3)
-    );
+  let tokenBalanceAfterBuy = await tokenBalance(
+    new PublicKey(project.staticPoolMint),
+    user.publicKey
+  );
+  expect(tokenBalanceAfterBuy).to.be.gte(minTokenOutput);
+  let solBalanceAfterBuy = await connection.getBalance(user.publicKey);
 
-    let tokenBalanceAfterSell = await tokenBalance(
-      new PublicKey(project.staticPoolMint),
-      user.publicKey
-    );
-    expect(tokenBalanceAfterSell).to.be.equal(
-      tokenBalanceAfterBuy - tokensToSell
-    );
-    let solBalanceAfterSell = await connection.getBalance(user.publicKey);
-    expect(solBalanceAfterSell).to.be.greaterThan(
-      solBalanceAfterBuy - sellMeta.feeEstimate
-    );
+  let tokensToSell = Math.floor(minTokenOutput / 2);
+  let sellMeta = await sellToProject(
+    projectResult.projectId,
+    user,
+    tokensToSell,
+    Math.floor(solToSpend / 3)
+  );
+
+  let tokenBalanceAfterSell = await tokenBalance(
+    new PublicKey(project.staticPoolMint),
+    user.publicKey
+  );
+  expect(tokenBalanceAfterSell).to.be.equal(
+    tokenBalanceAfterBuy - tokensToSell
+  );
+  let solBalanceAfterSell = await connection.getBalance(user.publicKey);
+  expect(solBalanceAfterSell).to.be.greaterThan(
+    solBalanceAfterBuy - sellMeta.feeEstimate
+  );
+}
+
+async function testBuySellCurvePool(
+  curve: components["schemas"]["CurveVariant"]
+) {
+  let _provider = getProvider();
+  let connection = _provider.connection;
+
+  const owner = anchor.web3.Keypair.generate();
+  const user = anchor.web3.Keypair.generate();
+  await airdrop(owner.publicKey, new BN(LAMPORTS_PER_SOL * 1.2));
+  await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
+
+  const schema: components["schemas"]["DeploySchema"] = {
+    curvePool: curve,
+    staticPool: {
+      launchPeriod: 10,
+    },
+    devPurchase: {
+      lock: { type: "disabled" },
+      value: LAMPORTS_PER_SOL,
+    },
+  };
+
+  let projectMeta = sampleCreateProjectMeta(owner, schema);
+  let projectResult = await createProject(owner, projectMeta);
+  let project = await waitForProject(
+    projectResult.projectId,
+    "curvePoolActive"
+  );
+
+  let curvePoolMint = new PublicKey(project.curvePoolMint!);
+
+  console.log("project is created, verifying creator's balance");
+  let balance = await tokenBalance(curvePoolMint, owner.publicKey);
+  expect(balance).to.be.gt(100_000_000);
+
+  let solsToSpend = Math.floor(LAMPORTS_PER_SOL / 3);
+  let minTokenOutput = 1_000_000;
+  console.log("buying from curve pool in sols", solsToSpend);
+  await buyFromProject(
+    projectResult.projectId,
+    user,
+    solsToSpend,
+    minTokenOutput
+  );
+  let balanceAfterBuy = await connection.getBalance(user.publicKey);
+  let tokensAfterBuy = await tokenBalance(curvePoolMint, user.publicKey);
+  expect(tokensAfterBuy).to.be.gte(minTokenOutput);
+
+  let tokensToSell = Math.floor(tokensAfterBuy / 2);
+  let sellMeta = await sellToProject(
+    projectResult.projectId,
+    user,
+    tokensToSell,
+    0
+  );
+  let tokensAfterSell = await tokenBalance(curvePoolMint, user.publicKey);
+  expect(tokensAfterSell).to.be.equal(tokensAfterBuy - tokensToSell);
+  let solBalanceAfterSell = await connection.getBalance(user.publicKey);
+  expect(solBalanceAfterSell).to.be.greaterThan(
+    solBalanceAfterSell - sellMeta.feeEstimate
+  );
+  expect(solBalanceAfterSell).to.be.greaterThan(
+    balanceAfterBuy - sellMeta.feeEstimate
+  );
+}
+
+async function claimDevLock(owner: Keypair, projectId: string) {
+  let _provider = getProvider();
+  let connection = _provider.connection;
+
+  let result = await withErrorHandling(
+    withTimeout(
+      2000,
+      client.POST("/api/project/claim_dev_lock", {
+        body: {
+          projectId: projectId,
+        },
+      })
+    )
+  );
+  if (result.error) {
+    throw new Error(JSON.stringify(result.error));
+  }
+  let transaction = Transaction.from(
+    Buffer.from(result.data.transaction, "base64")
+  );
+  transaction.recentBlockhash = (
+    await connection.getLatestBlockhash()
+  ).blockhash;
+  transaction.partialSign(owner);
+  transaction.verifySignatures(true);
+  await sendTransaction(getProvider().connection, transaction);
+  return result;
+}
+
+async function testDevLockWorks(curve: components["schemas"]["CurveVariant"]) {
+  let _provider = getProvider();
+  let connection = _provider.connection;
+
+  const owner = anchor.web3.Keypair.generate();
+  await airdrop(owner.publicKey, new BN(LAMPORTS_PER_SOL * 1.2));
+
+  const schema: components["schemas"]["DeploySchema"] = {
+    curvePool: curve,
+    staticPool: {
+      launchPeriod: 10,
+    },
+    devPurchase: {
+      lock: { type: "interval", interval: 5 },
+      value: LAMPORTS_PER_SOL,
+    },
+  };
+  let projectMeta = sampleCreateProjectMeta(owner, schema);
+  let projectResult = await createProject(owner, projectMeta);
+  let project = await waitForProject(
+    projectResult.projectId,
+    "curvePoolActive"
+  );
+
+  let curvePoolMint = new PublicKey(project.curvePoolMint!);
+  await expectNoATA(curvePoolMint, owner.publicKey);
+  let escrow = devLockEscrow(new PublicKey(project.devLockBase));
+  let escrowATA = getAssociatedTokenAddressSync(curvePoolMint, escrow, true);
+  console.log(`would check escrow token balance: ${escrow} ${escrowATA}`);
+
+  let escrowBalance = await waitForOk(
+    async () => await tokenBalance(curvePoolMint, escrow)
+  );
+  expect(escrowBalance).to.gt(100_000_000);
+  await delay(1000);
+
+  await claimDevLock(owner, project.id);
+  let balanceBeforeUnlock = await tokenBalance(curvePoolMint, owner.publicKey);
+  expect(balanceBeforeUnlock).to.eq(0);
+
+  await waitOnClusterTime(connection, currentTS() + 5);
+  await claimDevLock(project.id);
+
+  let ownerBalance = await waitForOk(
+    async () => await tokenBalance(curvePoolMint, owner.publicKey)
+  );
+  expect(ownerBalance).to.eq(escrowBalance);
+}
+
+describe("projects operations", () => {
+  anchor.setProvider(anchor.AnchorProvider.env());
+  before(beforeAll);
+
+  it("[moonzip] create buy sell from static pool project", async () => {
+    testBuySellStaticPool("moonzip");
   });
 
-  it("create and wait for static pool graduate, buy from curve pool", async () => {
-    const owner = anchor.web3.Keypair.generate();
-    const user = anchor.web3.Keypair.generate();
-    await airdrop(owner.publicKey, new BN(LAMPORTS_PER_SOL * 1.2));
-    await airdrop(user.publicKey, new BN(LAMPORTS_PER_SOL));
-    let projectMeta = sampleCreateProjectMeta(owner, LAMPORTS_PER_SOL);
-    let projectResult = await createProject(owner, projectMeta);
-    let project = await waitForProject(
-      projectResult.projectId,
-      "curvePoolActive"
-    );
-    let curvePoolMint = new PublicKey(project.curvePoolMint!);
-    let solsToSpend = Math.floor(LAMPORTS_PER_SOL / 3);
-    let minTokenOutput = 1_000_000;
-    console.log("buying from curve pool in sols", solsToSpend);
-    await buyFromProject(
-      projectResult.projectId,
-      user,
-      solsToSpend,
-      minTokenOutput
-    );
-    let balanceAfterBuy = await connection.getBalance(user.publicKey);
-    let tokensAfterBuy = await tokenBalance(curvePoolMint, user.publicKey);
-    expect(tokensAfterBuy).to.be.gte(minTokenOutput);
+  it("[pumpfun] create buy sell from static pool project", async () => {
+    testBuySellStaticPool("pumpfun");
+  });
 
-    let tokensToSell = Math.floor(tokensAfterBuy / 2);
-    let sellMeta = await sellToProject(
-      projectResult.projectId,
-      user,
-      tokensToSell,
-      0
-    );
-    let tokensAfterSell = await tokenBalance(curvePoolMint, user.publicKey);
-    expect(tokensAfterSell).to.be.equal(tokensAfterBuy - tokensToSell);
-    let solBalanceAfterSell = await connection.getBalance(user.publicKey);
-    expect(solBalanceAfterSell).to.be.greaterThan(
-      solBalanceAfterSell - sellMeta.feeEstimate
-    );
-    expect(solBalanceAfterSell).to.be.greaterThan(
-      balanceAfterBuy - sellMeta.feeEstimate
-    );
+  it("[moonzip] create and wait for static pool graduate, buy from curve pool", async () => {
+    testBuySellCurvePool("moonzip");
+  });
+
+  it("[pumpfun] create and wait for static pool graduate, buy from curve pool", async () => {
+    testBuySellCurvePool("pumpfun");
+  });
+
+  it("[moonzip] create, wait for curve pool, ensure dev lock works", async () => {
+    testDevLockWorks("moonzip");
+  });
+
+  it("[pumpfun] create, wait for curve pool, ensure dev lock works", async () => {
+    testDevLockWorks("pumpfun");
   });
 });

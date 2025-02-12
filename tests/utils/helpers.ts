@@ -1,4 +1,11 @@
-import { Connection, PublicKey, Signer, Transaction } from "@solana/web3.js";
+import { web3 } from "@coral-xyz/anchor";
+import {
+  Connection,
+  PublicKey,
+  SendTransactionError,
+  Signer,
+  Transaction,
+} from "@solana/web3.js";
 
 export const withTimeout = <T>(millis, promise: Promise<T>): Promise<T> => {
   let timeoutPid;
@@ -28,6 +35,25 @@ export const withErrorHandling = async <T>(promise: Promise<T>) => {
   }
 };
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function time() {
+  const nanos = process.hrtime.bigint();
+  return Number(nanos / BigInt(1_000_000));
+}
+
+export async function waitForOk<T>(f: () => Promise<T>): Promise<T> {
+  let start = time();
+  while (time() - start < 30000) {
+    try {
+      return await f();
+    } catch (err) {
+      console.log(`promise rejected with error: ${err}, would sleep`);
+    }
+    await delay(2000);
+  }
+  throw new Error("promise is not ok in 30s, failure");
+}
+
 export const sendTransaction = async (
   connection: Connection,
   transaction: Transaction
@@ -41,6 +67,12 @@ export const sendTransaction = async (
     );
   } catch (error) {
     console.log("Raw failed transaction: ", JSON.stringify(transaction));
+    if (error instanceof SendTransactionError) {
+      console.log(
+        "Full logs of failed transaction: ",
+        await error.getLogs(connection)
+      );
+    }
     throw error;
   }
   console.log(`sent transaction ${signature}`);
@@ -77,4 +109,32 @@ export async function signTransaction(
     tx.partialSign(signer);
   }
   return tx;
+}
+
+export async function waitOnClusterTime(
+  connection: web3.Connection,
+  deadline: number
+) {
+  const getCurrentBlockTime = async () => {
+    // TODO fetch clock account can help to reduce rpc call
+    const currentSlot = await connection.getSlot();
+    const currentBlockTime = await connection.getBlockTime(currentSlot);
+    return currentBlockTime;
+  };
+
+  while (true) {
+    const currentBlockTime = await getCurrentBlockTime();
+    if (currentBlockTime > deadline) {
+      break;
+    } else {
+      await delay(1000);
+      console.log(
+        `current block time is ${currentBlockTime}, waiting for ${deadline}`
+      );
+    }
+  }
+}
+
+export function currentTS() {
+  return Math.floor(new Date(new Date().toUTCString()).getTime() / 1000);
 }

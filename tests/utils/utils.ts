@@ -20,6 +20,9 @@ import { Moonzip } from "../../target/types/moonzip";
 const fs = require("node:fs");
 export const MZIP_FEE = 100;
 export const MAX_FEE_BPS = 10000;
+export const LOCKER_PROGRAM_ID = new PublicKey(
+  "LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn"
+);
 
 export function keypairFromFile(path: string): Keypair {
   const data = fs.readFileSync(path, "utf8");
@@ -101,11 +104,27 @@ export async function mintToken(
   console.log(`minted ${amount.toString()} tokens to ${to.toBase58()}`);
 }
 
+export async function expectNoATA(mint: PublicKey, owner: PublicKey) {
+  const provider = getProvider();
+  try {
+    const response = (
+      await provider.connection.getTokenAccountBalance(
+        getAssociatedTokenAddressSync(mint, owner)
+      )
+    ).value;
+    throw Error(
+      `token account exists for owner ${owner}, mint ${mint}, balance: ${response}`
+    );
+  } catch (err) {
+    return true;
+  }
+}
+
 export async function tokenBalance(mint: PublicKey, owner: PublicKey) {
   const provider = getProvider();
   const response = (
     await provider.connection.getTokenAccountBalance(
-      getAssociatedTokenAddressSync(mint, owner)
+      getAssociatedTokenAddressSync(mint, owner, true)
     )
   ).value;
   return parseInt(response.amount);
@@ -220,6 +239,13 @@ export async function provideGlobalConfig() {
     .rpc();
   await connection.confirmTransaction(signature);
   console.log("fee config provided");
+}
+
+export function devLockEscrow(base: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("escrow"), base.toBuffer()],
+    LOCKER_PROGRAM_ID
+  )[0];
 }
 
 export async function beforeAll() {

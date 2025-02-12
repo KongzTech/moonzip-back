@@ -42,6 +42,20 @@ lint:
 db-migrate:
 	sqlx migrate run --source backend/db/migrations
 
+.PHONY: dev-db
+dev-db:
+	-docker stop moonzip-dev-db && docker rm moonzip-dev-db
+	docker run -d \
+  	--name moonzip-dev-db \
+  	-e POSTGRES_USER=app-adm \
+  	-e POSTGRES_PASSWORD=app-adm-pass \
+  	-e POSTGRES_DB=app-db \
+  	-p 15432:5432 \
+  	postgres:16
+	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
+	echo "SQLX_OFFLINE=true" >> .env
+	sqlx migrate run --source backend/db/migrations
+
 .PHONY: pre-commit
 pre-commit:
 	cargo sqlx prepare --workspace
@@ -53,8 +67,6 @@ test-env:
 	DOCKER_BUILDKIT=1 docker build -t moonzip/dev:latest -f docker/Dockerfile.ci --build-arg MOONZIP_AUTHORITY=$(MOONZIP_AUTHORITY) --target dev .
 	docker compose -f dev/docker-compose.dev.yml down -v --remove-orphans
 	docker compose -f dev/docker-compose.dev.yml up -d --wait
-	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
-	echo "SQLX_OFFLINE=true" >> .env
 
 .PHONY: e2e-test
 e2e-test:

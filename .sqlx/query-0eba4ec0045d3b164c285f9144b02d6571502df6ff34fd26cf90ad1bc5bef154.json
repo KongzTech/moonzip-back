@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7)",
+  "query": "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -53,9 +53,25 @@
                   "dev_purchase",
                   {
                     "Custom": {
-                      "name": "balance",
+                      "name": "dev_purchase",
                       "kind": {
-                        "Domain": "Numeric"
+                        "Composite": [
+                          [
+                            "amount",
+                            {
+                              "Custom": {
+                                "name": "balance",
+                                "kind": {
+                                  "Domain": "Numeric"
+                                }
+                              }
+                            }
+                          ],
+                          [
+                            "lock_period",
+                            "Int8"
+                          ]
+                        ]
                       }
                     }
                   }
@@ -96,10 +112,18 @@
             }
           }
         },
+        {
+          "Custom": {
+            "name": "keypair",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
         "Timestamptz"
       ]
     },
     "nullable": []
   },
-  "hash": "6cafc048b1a944dc1fe9600e0a6433033abfdaacb66eaacea45a656cceb542f7"
+  "hash": "0eba4ec0045d3b164c285f9144b02d6571502df6ff34fd26cf90ad1bc5bef154"
 }

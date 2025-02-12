@@ -45,6 +45,42 @@
         }
       }
     },
+    "/api/project/claim_dev_lock": {
+      "post": {
+        "tags": [
+          "project"
+        ],
+        "operationId": "claim_dev_lock",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevLockClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Provided transaction to claim dev tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevLockClaimResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Logical error due to user input"
+          },
+          "5XX": {
+            "description": "Internal server error, contact support"
+          }
+        }
+      }
+    },
     "/api/project/create": {
       "post": {
         "tags": [
@@ -304,12 +340,14 @@
             "$ref": "#/components/schemas/CurveVariant"
           },
           "devPurchase": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DevPurchase"
+              }
+            ]
           },
           "staticPool": {
             "oneOf": [
@@ -320,6 +358,84 @@
                 "$ref": "#/components/schemas/StaticPoolSchema"
               }
             ]
+          }
+        }
+      },
+      "DevLockClaimRequest": {
+        "type": "object",
+        "required": [
+          "projectId"
+        ],
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "DevLockClaimResponse": {
+        "type": "object",
+        "required": [
+          "transaction"
+        ],
+        "properties": {
+          "transaction": {
+            "type": "string"
+          }
+        }
+      },
+      "DevLockPeriod": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "disabled"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "interval",
+              "type"
+            ],
+            "properties": {
+              "interval": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "interval"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DevPurchase": {
+        "type": "object",
+        "required": [
+          "value",
+          "lock"
+        ],
+        "properties": {
+          "lock": {
+            "$ref": "#/components/schemas/DevLockPeriod"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -372,6 +488,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "devLockBase": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "id": {
             "type": "string",

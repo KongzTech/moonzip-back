@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT\n                id,\n                owner,\n                deploy_schema AS \"deploy_schema: _\",\n                stage AS \"stage: _\",\n                static_pool_pubkey AS \"static_pool_pubkey?: _\",\n                curve_pool_keypair AS \"curve_pool_keypair?: _\",\n                created_at\n            FROM project WHERE stage != $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3",
+  "query": "SELECT\n                id,\n                owner,\n                deploy_schema AS \"deploy_schema: _\",\n                stage AS \"stage: _\",\n                static_pool_pubkey AS \"static_pool_pubkey?: _\",\n                curve_pool_keypair AS \"curve_pool_keypair?: _\",\n                dev_lock_keypair AS \"dev_lock_keypair?: _\",\n                created_at\n            FROM project WHERE id = $1 FOR UPDATE NOWAIT",
   "describe": {
     "columns": [
       {
@@ -55,9 +55,25 @@
                   "dev_purchase",
                   {
                     "Custom": {
-                      "name": "balance",
+                      "name": "dev_purchase",
                       "kind": {
-                        "Domain": "Numeric"
+                        "Composite": [
+                          [
+                            "amount",
+                            {
+                              "Custom": {
+                                "name": "balance",
+                                "kind": {
+                                  "Domain": "Numeric"
+                                }
+                              }
+                            }
+                          ],
+                          [
+                            "lock_period",
+                            "Int8"
+                          ]
+                        ]
                       }
                     }
                   }
@@ -99,30 +115,18 @@
       },
       {
         "ordinal": 6,
+        "name": "dev_lock_keypair?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 7,
         "name": "created_at",
         "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        {
-          "Custom": {
-            "name": "project_stage",
-            "kind": {
-              "Enum": [
-                "Created",
-                "Confirmed",
-                "OnStaticPool",
-                "StaticPoolClosed",
-                "OnCurvePool",
-                "CurvePoolClosed",
-                "Graduated"
-              ]
-            }
-          }
-        },
-        "Timestamptz",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -132,8 +136,9 @@
       false,
       true,
       true,
+      true,
       false
     ]
   },
-  "hash": "2aa67c60e9cec23242b5ed0870ab7500b799a5babc65d44bc3ccc81b4217204a"
+  "hash": "dc5cca0a383b934041915764c4a4688dbeb860523fab45c9f207923328fee113"
 }

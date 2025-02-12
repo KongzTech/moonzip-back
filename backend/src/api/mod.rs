@@ -1,9 +1,9 @@
 use crate::app::{
     exposed::{
         BuyRequest, BuyResponse, CreateProjectForm, CreateProjectResponse, CreateProjectStreamData,
+        DevLockClaimRequest, DevLockClaimResponse, GetProjectRequest, GetProjectResponse,
         SellRequest, SellResponse,
     },
-    exposed::{GetProjectRequest, GetProjectResponse},
     App,
 };
 use axum::{
@@ -33,6 +33,7 @@ pub fn router() -> Router<BackendState> {
                 .route("/create", post(create_project))
                 .route("/buy", post(buy))
                 .route("/sell", post(sell))
+                .route("/claim_dev_lock", post(claim_dev_lock))
                 .route("/get", get(get_project)),
         )
         .layer(DefaultBodyLimit::max(1024 * 4))
@@ -112,6 +113,22 @@ pub async fn sell(
     Json(request): Json<SellRequest>,
 ) -> Result<AppJson<SellResponse>, ApiError> {
     Ok(AppJson(state.app().sell(request).await?))
+}
+
+#[utoipa::path(
+    post,
+    tag = "project",
+    path = "/api/project/claim_dev_lock",
+    responses(
+        (status = 200, description = "Provided transaction to claim dev tokens", body = DevLockClaimResponse),
+        ErrorResponse
+    )
+)]
+pub async fn claim_dev_lock(
+    State(state): State<BackendState>,
+    Json(request): Json<DevLockClaimRequest>,
+) -> Result<AppJson<DevLockClaimResponse>, ApiError> {
+    Ok(AppJson(state.app().dev_lock_claim(request).await?))
 }
 
 #[utoipa::path(

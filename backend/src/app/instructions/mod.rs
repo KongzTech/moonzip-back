@@ -1,5 +1,13 @@
-use super::storage::project::{project_id, CurveVariant, Stage, StoredProject, StoredTokenMeta};
-use anchor_spl::associated_token::get_associated_token_address;
+use super::{
+    exposed::DevLockPeriod,
+    storage::project::{project_id, CurveVariant, Stage, StoredProject, StoredTokenMeta},
+};
+use anchor_spl::associated_token::{
+    get_associated_token_address,
+    spl_associated_token_account::instruction::{
+        create_associated_token_account, create_associated_token_account_idempotent,
+    },
+};
 use anyhow::bail;
 use moonzip::{
     accounts::BaseInitTransmuterAccounts,
@@ -7,10 +15,10 @@ use moonzip::{
     fee::fee_address,
     instruction::GraduateStaticPool,
     moonzip::{
-        curved_pool_address, static_pool_address, BuyFromCurvedPoolData, BuyFromStaticPoolData,
-        CreateCurvedPoolData, CreateStaticPoolData, CurvedPool, SellFromCurvedPoolData,
-        SellToStaticPoolData, StaticPool, StaticPoolConfig, Transmuter, CURVED_POOL_PREFIX,
-        TRANSMUTER_PREFIX,
+        curve::CalcBuy as _, curved_pool_address, static_pool_address, BuyFromCurvedPoolData,
+        BuyFromStaticPoolData, CreateCurvedPoolData, CreateStaticPoolData, CurvedPool,
+        SellFromCurvedPoolData, SellToStaticPoolData, StaticPool, StaticPoolConfig, Transmuter,
+        CURVED_POOL_PREFIX, TRANSMUTER_PREFIX,
     },
     project::{project_address, CreateProjectData},
     PROGRAM_AUTHORITY,
@@ -22,7 +30,7 @@ use openbook::OpenbookInstructionsBuilder;
 use serde::Deserialize;
 use serde_with::{serde_as, DurationSeconds};
 use serum_dex::instruction::initialize_market;
-use services_common::{solana::pool::SolanaPool, utils::period_fetch::DataReceiver};
+use services_common::{solana::pool::SolanaPool, utils::period_fetch::DataReceiver, TZ};
 use solana_sdk::{
     instruction::Instruction,
     native_token::{sol_to_lamports, LAMPORTS_PER_SOL},
@@ -33,19 +41,32 @@ use solana_sdk::{
     signer::Signer as _,
 };
 use std::{str::FromStr, sync::Arc, time::Duration};
+use utils::anchor_event_authority;
 
+pub mod lock;
 pub mod mpl;
 pub mod mzip;
 pub mod openbook;
 pub mod pumpfun;
 pub mod raydium;
 pub mod solana;
+pub mod utils;
 
 #[serde_as]
 #[derive(Debug, Clone, Deserialize, serde_derive_default::Default)]
 pub struct InstructionsConfig {
     #[serde(default = "default_serum_openbook_program")]
     pub serum_openbook_program: Pubkey,
+
+    #[serde(default = "default_locker_program")]
+    pub locker_program: Pubkey,
+
+    #[serde(default = "default_raydium_program")]
+    pub raydium_program: Pubkey,
+
+    #[serde(default = "default_memo_program")]
+    pub memo_program: Pubkey,
+
     #[serde(default = "default_sols_to_graduate")]
     pub sols_to_graduate: u64,
     #[serde(default = "default_rayidum_liquidity")]
@@ -54,9 +75,13 @@ pub struct InstructionsConfig {
     pub creator_graduate_reward: u64,
     #[serde(default = "default_pumpfun_init_price")]
     pub pumpfun_init_price: u64,
+
     #[serde(default = "default_allowed_launch_periods")]
     #[serde_as(as = "Vec<DurationSeconds<u64>>")]
     pub allowed_launch_periods: Vec<Duration>,
+
+    #[serde(default = "default_allowed_lock_periods")]
+    pub allowed_lock_periods: Vec<DevLockPeriod>,
 }
 
 fn default_allowed_launch_periods() -> Vec<Duration> {
@@ -67,8 +92,36 @@ fn default_allowed_launch_periods() -> Vec<Duration> {
     ]
 }
 
+fn default_allowed_lock_periods() -> Vec<DevLockPeriod> {
+    let hour = 60 * 60;
+    vec![
+        DevLockPeriod::Disabled,
+        DevLockPeriod::Interval {
+            interval: hour * 24,
+        },
+        DevLockPeriod::Interval {
+            interval: hour * 24 * 7,
+        },
+        DevLockPeriod::Interval {
+            interval: hour * 24 * 30,
+        },
+    ]
+}
+
+fn default_raydium_program() -> Pubkey {
+    Pubkey::from_str("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8").unwrap()
+}
+
+fn default_locker_program() -> Pubkey {
+    Pubkey::from_str("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn").unwrap()
+}
+
 fn default_serum_openbook_program() -> Pubkey {
     Pubkey::from_str("srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX").unwrap()
+}
+
+fn default_memo_program() -> Pubkey {
+    Pubkey::from_str("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr").unwrap()
 }
 
 fn default_sols_to_graduate() -> u64 {
@@ -93,6 +146,8 @@ const WRAPPED_SOL_MINT: Pubkey = solana_sdk::pubkey!("So111111111111111111111111
 pub struct InstructionsBuilder {
     pub solana_pool: SolanaPool,
     pub solana_meta: DataReceiver<solana::Meta>,
+    pub pump_meta: DataReceiver<pumpfun::Meta>,
+    pub mzip_meta: DataReceiver<mzip::Meta>,
     pub config: Arc<InstructionsConfig>,
 }
 
@@ -105,6 +160,10 @@ impl InstructionsBuilder {
             solana_pool: &self.solana_pool,
             project,
             config: &self.config,
+
+            pump_meta: self.pump_meta.clone(),
+            mzip_meta: self.mzip_meta.clone(),
+
             rent: self.solana_meta.clone().get()?.rent,
         })
     }
@@ -115,6 +174,10 @@ pub struct ProjectsOperations<'a> {
     solana_pool: &'a SolanaPool,
     project: &'a StoredProject,
     config: &'a InstructionsConfig,
+
+    pump_meta: DataReceiver<pumpfun::Meta>,
+    mzip_meta: DataReceiver<mzip::Meta>,
+
     rent: Rent,
 }
 
@@ -153,7 +216,7 @@ impl<'a> ProjectsOperations<'a> {
         }
 
         if let Some(purchase) = self.project.deploy_schema.dev_purchase.clone() {
-            creator_deposit += u64::try_from(purchase)?;
+            creator_deposit += u64::try_from(purchase.amount)?;
         }
 
         let ix = program
@@ -249,6 +312,29 @@ impl<'a> ProjectsOperations<'a> {
             .instructions()?;
 
         Ok(ix)
+    }
+
+    pub fn init_transmuter(&mut self) -> anyhow::Result<Vec<Instruction>> {
+        if self.project.deploy_schema.static_pool.is_some() {
+            return Ok(vec![]);
+        }
+        let static_pool_mint = self
+            .project
+            .static_pool_mint()
+            .ok_or_else(|| anyhow::anyhow!("invariant: static pool mint is not already stored"))?;
+        let curve_mint = self.curve_mint()?;
+        Ok(match self.project.deploy_schema.curve_pool {
+            CurveVariant::Moonzip => self.add_transmuter_for_moonzip(TransmuterInitArgs {
+                from_mint: static_pool_mint,
+                to_mint: curve_mint,
+                donor: PROGRAM_AUTHORITY,
+            })?,
+            CurveVariant::Pumpfun => self.add_transmuter_for_pumpfun(TransmuterInitArgs {
+                from_mint: static_pool_mint,
+                to_mint: curve_mint,
+                donor: PROGRAM_AUTHORITY,
+            })?,
+        })
     }
 
     pub fn add_transmuter_for_moonzip(
@@ -451,7 +537,7 @@ impl<'a> ProjectsOperations<'a> {
 
         if let Some(purchase) = action.dev_purchase {
             let sols = purchase.sols;
-            ix.append(&mut buy(PROGRAM_AUTHORITY, sols)?)
+            ix.append(&mut buy(PROGRAM_AUTHORITY, sols)?);
         };
 
         if let Some(purchase) = action.post_dev_purchase {
@@ -557,6 +643,205 @@ impl<'a> ProjectsOperations<'a> {
                 initialize_market_ix,
             ],
         ))
+    }
+
+    pub fn lock_dev(&self) -> anyhow::Result<Vec<Instruction>> {
+        self._lock_dev(self.dev_tokens_amount()?)
+    }
+
+    fn _lock_dev(&self, tokens: u64) -> anyhow::Result<Vec<Instruction>> {
+        let curve_mint = self.curve_mint()?;
+        let sender = PROGRAM_AUTHORITY;
+        let sender_ata = get_associated_token_address(&sender, &curve_mint);
+        let owner = self.project.owner.to_pubkey();
+
+        let Some(period) = self
+            .project
+            .deploy_schema
+            .dev_purchase
+            .as_ref()
+            .map(|purchase| Duration::from_secs(purchase.lock_period as u64))
+        else {
+            bail!("invariant: dev purchase is not enabled for project")
+        };
+        if period.is_zero() {
+            bail!("zero period must be delivered immediately, without locking");
+        }
+
+        let client = self.solana_pool.builder();
+        let program_id = self.config.locker_program;
+
+        let program = client.program(program_id)?;
+
+        let base: Keypair = self
+            .project
+            .dev_lock_keypair
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("invariant: no dev lock keypair provided"))?
+            .to_keypair();
+        let escrow_addr = lock::escrow_address(&base.pubkey(), &self.config.locker_program);
+        let escrow_ata = get_associated_token_address(&escrow_addr, &curve_mint);
+
+        let cliff_time = (TZ::now() + period).timestamp() as u64;
+        tracing::debug!("would unlock {tokens} after {cliff_time}");
+
+        let frequency = 1;
+
+        let mut ixs = vec![create_associated_token_account(
+            &sender,
+            &escrow_addr,
+            &curve_mint,
+            &anchor_spl::token::ID,
+        )];
+        let mut create_vesting = program
+            .request()
+            .accounts(locker::accounts::CreateVestingEscrowV2 {
+                base: base.pubkey(),
+                escrow: escrow_addr,
+                token_mint: curve_mint,
+                escrow_token: escrow_ata,
+                sender,
+                sender_token: sender_ata,
+                recipient: owner,
+                event_authority: anchor_event_authority(&program_id),
+
+                program: program_id,
+                system_program: solana_sdk::system_program::ID,
+                token_program: anchor_spl::token::ID,
+            })
+            .args(locker::instruction::CreateVestingEscrowV2 {
+                params: locker::CreateVestingEscrowParameters {
+                    vesting_start_time: cliff_time,
+                    cliff_time,
+                    frequency,
+                    cliff_unlock_amount: 0,
+                    amount_per_period: tokens,
+                    number_of_period: 1,
+                    update_recipient_mode: 0,
+                    cancel_mode: 0,
+                },
+                remaining_accounts_info: None,
+            })
+            .instructions()?;
+        ixs.append(&mut create_vesting);
+        Ok(ixs)
+    }
+
+    pub fn claim_dev_lock(&self) -> anyhow::Result<Vec<Instruction>> {
+        let curve_mint = self.curve_mint()?;
+        let owner = self.project.owner.to_pubkey();
+
+        let Some(period) = self
+            .project
+            .deploy_schema
+            .dev_purchase
+            .as_ref()
+            .map(|purchase| Duration::from_secs(purchase.lock_period as u64))
+        else {
+            bail!("invariant: dev purchase is not enabled for project")
+        };
+        if period.is_zero() {
+            bail!("zero period must be delivered immediately, without locking");
+        }
+
+        let client = self.solana_pool.builder();
+        let program_id = self.config.locker_program;
+
+        let program = client.program(program_id)?;
+
+        let base: Keypair = self
+            .project
+            .dev_lock_keypair
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("invariant: no dev lock keypair provided"))?
+            .to_keypair();
+        let escrow_addr = lock::escrow_address(&base.pubkey(), &self.config.locker_program);
+        let escrow_ata = get_associated_token_address(&escrow_addr, &curve_mint);
+        let owner_ata = get_associated_token_address(&owner, &curve_mint);
+
+        let mut ixs = vec![create_associated_token_account_idempotent(
+            &owner,
+            &owner,
+            &curve_mint,
+            &anchor_spl::token::ID,
+        )];
+        let mut claim_ix = program
+            .request()
+            .accounts(locker::accounts::ClaimV2 {
+                escrow: escrow_addr,
+                token_mint: curve_mint,
+                escrow_token: escrow_ata,
+                recipient_token: owner_ata,
+                recipient: owner,
+                event_authority: anchor_event_authority(&program_id),
+
+                memo_program: self.config.memo_program,
+                program: program_id,
+                token_program: anchor_spl::token::ID,
+            })
+            .args(locker::instruction::ClaimV2 {
+                max_amount: u64::MAX,
+                remaining_accounts_info: None,
+            })
+            .instructions()?;
+        ixs.append(&mut claim_ix);
+        Ok(ixs)
+    }
+
+    pub fn deliver_dev_tokens(&self) -> anyhow::Result<Vec<Instruction>> {
+        let curve_mint = self.curve_mint()?;
+        let sender = PROGRAM_AUTHORITY;
+        let sender_ata = get_associated_token_address(&sender, &curve_mint);
+        let owner = self.project.owner.to_pubkey();
+        let owner_ata = get_associated_token_address(&owner, &curve_mint);
+
+        let tokens = self.dev_tokens_amount()?;
+        tracing::debug!("would deliver {tokens} to dev {owner}");
+
+        Ok(vec![
+            create_associated_token_account(&sender, &owner, &curve_mint, &anchor_spl::token::ID),
+            spl_token::instruction::transfer(
+                &anchor_spl::token::ID,
+                &sender_ata,
+                &owner_ata,
+                &sender,
+                &[],
+                tokens,
+            )?,
+        ])
+    }
+
+    fn dev_tokens_amount(&self) -> anyhow::Result<u64> {
+        let dev_purchase = self
+            .project
+            .deploy_schema
+            .dev_purchase
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("invariant: dev purchase is missing for dev delivery")
+            })?;
+        let sols = u64::try_from(dev_purchase.amount.to_owned())?;
+        let tokens = match self.project.deploy_schema.curve_pool {
+            CurveVariant::Pumpfun => {
+                let initial = moonzip::pumpfun::CurveWrapper::initial(
+                    &self.pump_meta.clone().get()?.global_account,
+                );
+                moonzip::pumpfun::BuyCalculator::new(&initial)
+                    .fixed_sols(sols)
+                    .tokens
+            }
+            CurveVariant::Moonzip => {
+                let meta = self.mzip_meta.clone().get()?;
+                let initial = moonzip::curved_pool::curve::CurveState::from_cfg(
+                    &meta.global_account.config.curve,
+                );
+                let result = moonzip::curved_pool::curve::BuyCalculator::new(&initial)
+                    .with_fee(meta.fee_account.config.on_buy)
+                    .fixed_sols(sols);
+                result
+            }
+        };
+        Ok(tokens)
     }
 
     pub fn lock_project(&self) -> anyhow::Result<Vec<Instruction>> {

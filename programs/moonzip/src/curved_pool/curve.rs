@@ -110,6 +110,10 @@ impl<'a> BuyCalculator<'a> {
     pub fn new(curve: &'a CurveState) -> Self {
         Self { curve }
     }
+
+    pub fn with_fee(self, fee: BasisPoints) -> impl CalcBuy + 'a {
+        BuyCalculatorWithFee::new(self, fee)
+    }
 }
 impl<'a> CalcBuy for BuyCalculator<'a> {
     fn fixed_sols(&self, sols: u64) -> u64 {

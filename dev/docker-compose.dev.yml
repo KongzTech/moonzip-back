@@ -54,6 +54,9 @@ services:
     command: ["bash", "./tests/utils/test_validator.sh"]
     networks:
       - moonzip-dev
+    ports:
+      - 18899:18899
+      - 18900:18900
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 18899"]
       interval: 5s

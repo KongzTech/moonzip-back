@@ -2,8 +2,8 @@ use crate::solana::SolanaKeys;
 use anyhow::bail;
 use exposed::{
     BuyRequest, BuyResponse, CreateProjectRequest, CreateProjectResponse, CreateProjectStreamData,
-    GetProjectRequest, GetProjectResponse, PublicProject, SellRequest, SellResponse,
-    StoredProjectInfo,
+    DevLockClaimRequest, DevLockClaimResponse, DevLockPeriod, GetProjectRequest,
+    GetProjectResponse, PublicProject, SellRequest, SellResponse, StoredProjectInfo,
 };
 use instructions::{
     mpl::{SampleMetadata, SAMPLE_MPL_URI},
@@ -47,6 +47,29 @@ impl App {
                 bail!("Invalid launch period: {}", static_pool.launch_period);
             }
         };
+
+        if let Some(dev_purchase) = &request.deploy_schema.dev_purchase {
+            if !self
+                .instructions_builder
+                .config
+                .allowed_lock_periods
+                .contains(&dev_purchase.lock)
+            {
+                bail!("Invalid dev lock period: {:?}", &dev_purchase.lock)
+            }
+        }
+        let dev_lock_needed = request
+            .deploy_schema
+            .dev_purchase
+            .as_ref()
+            .map(|purchase| purchase.lock != DevLockPeriod::Disabled)
+            .unwrap_or(false);
+        let dev_lock_keypair = if dev_lock_needed {
+            Some(Keypair::new().into())
+        } else {
+            None
+        };
+
         let deploy_schema = request.deploy_schema.try_to_stored()?;
 
         let static_pool_keypair = if deploy_schema.static_pool.is_some() {
@@ -63,6 +86,7 @@ impl App {
             static_pool_pubkey: static_pool_keypair
                 .as_ref()
                 .map(|keypair| keypair.pubkey().into()),
+            dev_lock_keypair,
             curve_pool_keypair: None,
             created_at: chrono::Utc::now(),
         };
@@ -80,13 +104,14 @@ impl App {
         let mut tx = self.storage.serializable_tx().await?;
 
         sqlx::query!(
-            "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO project VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             project.id,
             project.owner as _,
             project.deploy_schema as _,
             project.stage as _,
             project.static_pool_pubkey as _,
             project.curve_pool_keypair as _,
+            project.dev_lock_keypair as _,
             project.created_at
         )
         .execute(&mut *tx)
@@ -154,6 +179,19 @@ impl App {
         Ok(SellResponse { transaction: tx })
     }
 
+    pub async fn dev_lock_claim(
+        &self,
+        request: DevLockClaimRequest,
+    ) -> anyhow::Result<DevLockClaimResponse> {
+        let project = self.get_full_project(request.project_id).await?;
+
+        let builder = self.instructions_builder.for_project(&project)?;
+        let ixs = builder.claim_dev_lock()?;
+        let tx = Transaction::new_with_payer(&ixs, Some(&project.owner.to_pubkey()));
+
+        Ok(DevLockClaimResponse { transaction: tx })
+    }
+
     pub async fn get_project(
         &self,
         request: GetProjectRequest,
@@ -168,6 +206,7 @@ impl App {
                 project.stage AS "stage: _",
                 project.static_pool_pubkey AS "static_pool_pubkey?: _",
                 project.curve_pool_keypair AS "curve_pool_keypair?: _",
+                project.dev_lock_keypair AS "dev_lock_keypair?: _",
                 project.created_at AS "created_at: _"
             FROM project, token_meta WHERE project.id = $1 AND token_meta.project_id = $1"#,
             request.project_id as _,
@@ -201,6 +240,7 @@ impl App {
                 stage AS "stage: _",
                 static_pool_pubkey AS "static_pool_pubkey?: _",
                 curve_pool_keypair AS "curve_pool_keypair?: _",
+                dev_lock_keypair AS "dev_lock_keypair?: _",
                 created_at
             FROM project WHERE id = $1"#,
             project_id as _,

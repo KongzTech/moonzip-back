@@ -5,6 +5,7 @@ use super::storage::{
 };
 use anyhow::bail;
 use chrono::DateTime;
+use rust_decimal::prelude::Zero;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use services_common::{utils::serialize_tx_bs64, TZ};
@@ -34,6 +35,10 @@ pub struct PublicProject {
     #[serde_as(as = "Option<DisplayFromStr>")]
     #[schema(value_type = Option<String>)]
     pub curve_pool_mint: Option<Pubkey>,
+
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[schema(value_type = Option<String>)]
+    pub dev_lock_base: Option<Pubkey>,
 }
 
 pub struct StoredProjectInfo {
@@ -44,6 +49,7 @@ pub struct StoredProjectInfo {
     pub stage: Stage,
     pub static_pool_pubkey: Option<StoredPubkey>,
     pub curve_pool_keypair: Option<StoredKeypair>,
+    pub dev_lock_keypair: Option<StoredKeypair>,
     pub created_at: DateTime<TZ>,
 }
 
@@ -74,6 +80,9 @@ impl TryFrom<StoredProjectInfo> for PublicProject {
             created_at: project.created_at.to_string(),
             static_pool_mint,
             curve_pool_mint,
+            dev_lock_base: project
+                .dev_lock_keypair
+                .map(|key| key.to_keypair().pubkey()),
         })
     }
 }
@@ -136,7 +145,14 @@ pub struct StaticPoolSchema {
 pub struct DeploySchema {
     pub static_pool: Option<StaticPoolSchema>,
     pub curve_pool: CurveVariant,
-    pub dev_purchase: Option<u64>,
+    pub dev_purchase: Option<DevPurchase>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DevPurchase {
+    pub value: u64,
+    pub lock: DevLockPeriod,
 }
 
 impl DeploySchema {
@@ -219,6 +235,21 @@ pub struct SellResponse {
     pub transaction: Transaction,
 }
 
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DevLockClaimRequest {
+    pub project_id: Uuid,
+}
+
+#[derive(Debug, Serialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DevLockClaimResponse {
+    #[schema(value_type = String)]
+    #[serde(serialize_with = "serialize_tx_bs64")]
+    pub transaction: Transaction,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SlippageSettings {
@@ -236,4 +267,28 @@ pub struct GetProjectRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GetProjectResponse {
     pub project: Option<PublicProject>,
+}
+
+#[serde_as]
+#[derive(Deserialize, Serialize, Debug, Clone, ToSchema, PartialEq, PartialOrd)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum DevLockPeriod {
+    Disabled,
+    Interval { interval: u64 },
+}
+
+impl DevLockPeriod {
+    pub fn as_secs(&self) -> u64 {
+        match self {
+            DevLockPeriod::Disabled => 0,
+            DevLockPeriod::Interval { interval } => *interval,
+        }
+    }
+
+    pub fn from_secs(secs: u64) -> Self {
+        if secs.is_zero() {
+            return Self::Disabled;
+        }
+        Self::Interval { interval: secs }
+    }
 }

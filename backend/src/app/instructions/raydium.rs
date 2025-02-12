@@ -1,17 +1,15 @@
 use super::{ProjectsOperations, WRAPPED_SOL_MINT};
 use anchor_spl::associated_token::get_associated_token_address;
 use moonzip::PROGRAM_AUTHORITY;
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use raydium_amm::processor::{AMM_ASSOCIATED_SEED, AMM_CONFIG_SEED};
 use solana_sdk::{
     instruction::Instruction, program_pack::Pack, pubkey::Pubkey,
     system_instruction::create_account_with_seed,
 };
 
-static AMM_AUTHORITY: Lazy<(Pubkey, u8)> =
-    Lazy::new(|| Pubkey::find_program_address(&[AMM_ASSOCIATED_SEED], &raydium_amm::ID));
-static AMM_CONFIG: Lazy<(Pubkey, u8)> =
-    Lazy::new(|| Pubkey::find_program_address(&[AMM_CONFIG_SEED], &raydium_amm::ID));
+static AMM_AUTHORITY: OnceCell<(Pubkey, u8)> = OnceCell::new();
+static AMM_CONFIG: OnceCell<(Pubkey, u8)> = OnceCell::new();
 
 impl<'a> ProjectsOperations<'a> {
     pub fn deploy_to_raydium(
@@ -32,7 +30,7 @@ impl<'a> ProjectsOperations<'a> {
         );
 
         // Create AMM authority
-        let (amm_authority, nonce) = *AMM_AUTHORITY;
+        let (amm_authority, nonce) = self.amm_authority();
 
         // Create AMM open orders account
         let (amm_open_orders, _) = raydium_amm::processor::get_associated_address_and_bump_seed(
@@ -67,7 +65,7 @@ impl<'a> ProjectsOperations<'a> {
         let user_token_lp = get_associated_token_address(&donor, &amm_lp_mint);
 
         // Get AMM config account
-        let (amm_config, _) = *AMM_CONFIG;
+        let (amm_config, _) = self.amm_config();
 
         // Create fee destination account
         let create_fee_destination =
@@ -132,5 +130,15 @@ impl<'a> ProjectsOperations<'a> {
             initialize,
             close_user_wrapped_sol_account,
         ])
+    }
+
+    fn amm_authority(&self) -> (Pubkey, u8) {
+        *AMM_AUTHORITY
+            .get_or_init(|| Pubkey::find_program_address(&[AMM_ASSOCIATED_SEED], &raydium_amm::ID))
+    }
+
+    fn amm_config(&self) -> (Pubkey, u8) {
+        *AMM_CONFIG
+            .get_or_init(|| Pubkey::find_program_address(&[AMM_CONFIG_SEED], &raydium_amm::ID))
     }
 }

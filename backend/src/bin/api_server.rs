@@ -1,7 +1,7 @@
 use backend::{
     api::router,
     app::{
-        instructions::{self, InstructionsBuilder, InstructionsConfig},
+        instructions::{self, mzip, pumpfun, InstructionsBuilder, InstructionsConfig},
         storage::{StorageClient, StorageConfig},
         App,
     },
@@ -14,7 +14,7 @@ use services_common::{
     api::server::{serve, ApiConfig, AppState},
     cfg::load_config,
     solana::pool::{SolanaPool, SolanaPoolConfig},
-    utils::period_fetch::PeriodicFetcher,
+    utils::period_fetch::{PeriodicFetcher, PeriodicFetcherConfig},
 };
 use std::sync::Arc;
 use tracing::info;
@@ -43,10 +43,26 @@ pub async fn main() -> anyhow::Result<()> {
         cfg.fetchers.solana_meta,
     )
     .serve();
+    let pumpfun_meta_rx = PeriodicFetcher::new(
+        pumpfun::MetaFetcher {
+            pool: solana_pool.clone(),
+        },
+        PeriodicFetcherConfig::every_hour(),
+    )
+    .serve();
+    let moonzip_meta_rx = PeriodicFetcher::new(
+        mzip::MetaFetcher {
+            pool: solana_pool.clone(),
+        },
+        PeriodicFetcherConfig::every_hour(),
+    )
+    .serve();
 
     let instructions_builder = InstructionsBuilder {
         solana_pool: solana_pool.clone(),
         solana_meta: solana_meta.clone(),
+        mzip_meta: moonzip_meta_rx,
+        pump_meta: pumpfun_meta_rx,
         config: cfg.instructions.into(),
     };
 
