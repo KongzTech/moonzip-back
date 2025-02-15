@@ -29,4 +29,4 @@ instructions:
   allowed_lock_periods:
     - type: disabled
     - type: interval
-      interval: 5
+      interval: 10

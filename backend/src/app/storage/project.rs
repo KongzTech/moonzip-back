@@ -158,7 +158,9 @@ impl StoredDeploySchema {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, sqlx::Type, ToSchema)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, sqlx::Type, ToSchema, PartialEq, PartialOrd,
+)]
 #[serde(rename_all = "camelCase")]
 #[sqlx(type_name = "curve_variant")]
 pub enum CurveVariant {

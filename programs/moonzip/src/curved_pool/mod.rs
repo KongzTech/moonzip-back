@@ -56,6 +56,7 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
     if !ctx.accounts.pool.close_if_needed() {
         return err!(CurvedPoolError::NotClosed);
     }
+    ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
 
     let pool = ctx
         .accounts
@@ -65,6 +66,9 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
         .funds_receiver
         .add_lamports(ctx.accounts.pool.curve.sol_balance())?;
     pool.close(ctx.accounts.authority.to_account_info())?;
+
+    ctx.accounts.project.ensure_can_graduate()?;
+    ctx.accounts.project.stage = ProjectStage::Graduated;
 
     Ok(())
 }
@@ -436,9 +440,15 @@ pub struct SellFromCurvedPoolAccounts<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(data: GraduateCurvedPoolData)]
 pub struct GraduateCurvedPoolAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
+
+    #[account(mut,
+        seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump=project.bump
+    )]
+    pub project: Account<'info, Project>,
 
     #[account(
         mut,
@@ -459,6 +469,11 @@ pub struct GraduateCurvedPoolAccounts<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct GraduateCurvedPoolData {
+    pub project_id: ProjectId,
 }
 
 #[error_code]

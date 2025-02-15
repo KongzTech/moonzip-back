@@ -1,4 +1,4 @@
-use anchor_client::anchor_lang::AnchorDeserialize;
+use anchor_client::anchor_lang::AccountDeserialize;
 use once_cell::sync::Lazy;
 use services_common::{solana::pool::SolanaPool, utils::period_fetch::FetchExecutor};
 use solana_program::pubkey;
@@ -42,11 +42,12 @@ impl FetchExecutor<Meta> for MetaFetcher {
         let marker = global.context.slot;
         Ok(Meta {
             marker,
-            global_account: pumpfun_cpi::Global::try_from_slice(
-                &global
+            global_account: pumpfun_cpi::state::Global::try_deserialize(
+                &mut global
                     .value
                     .ok_or_else(|| anyhow::anyhow!("no global curve pool account yet"))?
-                    .data,
+                    .data
+                    .as_slice(),
             )?,
         })
     }

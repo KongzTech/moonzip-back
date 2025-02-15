@@ -6,11 +6,12 @@ use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PumpfunIpfsClientConfig {
+    #[serde(default = "default_base_url")]
     pub base_url: String,
 }
 
-pub fn default_base_url() -> String {
-    "https://pump.fun/api/ipfs".to_string()
+fn default_base_url() -> String {
+    "https://pump.fun".to_string()
 }
 
 pub struct CreateTokenMetadata<'a> {
@@ -81,7 +82,7 @@ impl PumpfunIpfsClient {
         // Send the request
         let response = self
             .client
-            .post(&self.config.base_url)
+            .post(format!("{}/api/ipfs", self.config.base_url))
             .multipart(form)
             .timeout(Duration::from_secs(7))
             .send()

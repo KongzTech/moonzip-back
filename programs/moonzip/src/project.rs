@@ -32,6 +32,13 @@ pub fn create(ctx: Context<CreateProjectAccounts>, data: CreateProjectData) -> R
     Ok(())
 }
 
+pub fn graduate(ctx: Context<GraduateProjectAccounts>) -> Result<()> {
+    ctx.accounts.project.ensure_can_graduate()?;
+    ctx.accounts.project.stage = ProjectStage::Graduated;
+
+    Ok(())
+}
+
 pub fn lock_latch(ctx: Context<ProjectLockLatchAccounts>) -> Result<()> {
     ctx.accounts.project.latch.lock(&ctx.accounts.authority)?;
     Ok(())
@@ -100,6 +107,23 @@ impl Project {
         }
         Ok(())
     }
+
+    pub fn ensure_can_graduate(&self) -> Result<()> {
+        // pumpfun also counts as graduation.
+        if self.schema.curve_pool == CurvePoolVariant::Pumpfun {
+            if self.schema.use_static_pool && self.stage != ProjectStage::StaticPoolClosed {
+                msg!("static pool must be closed before graduating to pumpfun");
+                return err!(ProjectError::NotReadyForGraduation);
+            }
+            return Ok(());
+        }
+
+        if self.stage != ProjectStage::CurvePoolClosed {
+            msg!("curve pool must be closed before graduating to AMM platform");
+            return err!(ProjectError::NotReadyForGraduation);
+        }
+        Ok(())
+    }
 }
 
 impl Sizable for Project {
@@ -163,6 +187,23 @@ pub struct CreateProjectData {
 }
 
 #[derive(Accounts)]
+#[instruction(data: GraduateProjectData)]
+pub struct GraduateProjectAccounts<'info> {
+    #[account(constraint = authority.key == &PROGRAM_AUTHORITY)]
+    pub authority: Signer<'info>,
+
+    #[account(mut,
+        seeds = [PROJECT_PREFIX, &data.id.to_bytes()], bump=project.bump
+    )]
+    pub project: Account<'info, Project>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct GraduateProjectData {
+    pub id: ProjectId,
+}
+
+#[derive(Accounts)]
 pub struct ProjectLockLatchAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]
     pub authority: Signer<'info>,
@@ -197,7 +238,7 @@ impl Sizable for ProjectSchema {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, PartialOrd)]
 pub enum CurvePoolVariant {
     Moonzip,
     Pumpfun,
@@ -277,6 +318,9 @@ pub enum ProjectError {
 
     #[msg("Curve pool already exists")]
     CurvePoolAlreadyExists,
+
+    #[msg("Project is not yet ready for graduation")]
+    NotReadyForGraduation,
 
     #[msg("Project is already graduated")]
     AlreadyGraduated,

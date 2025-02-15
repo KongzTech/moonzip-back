@@ -49,6 +49,13 @@ pub mod moonzip {
         project::unlock_latch(ctx)
     }
 
+    pub fn project_graduate(
+        ctx: Context<GraduateProjectAccounts>,
+        _data: GraduateProjectData,
+    ) -> Result<()> {
+        project::graduate(ctx)
+    }
+
     pub fn create_static_pool(
         ctx: Context<CreateStaticPoolAccounts>,
         data: CreateStaticPoolData,
@@ -88,7 +95,10 @@ pub mod moonzip {
         curved_pool::create(ctx, data)
     }
 
-    pub fn graduate_curved_pool(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
+    pub fn graduate_curved_pool(
+        ctx: Context<GraduateCurvedPoolAccounts>,
+        _data: GraduateCurvedPoolData,
+    ) -> Result<()> {
         curved_pool::graduate(ctx)
     }
 

@@ -17,8 +17,8 @@ use moonzip::{
     moonzip::{
         curve::CalcBuy as _, curved_pool_address, static_pool_address, BuyFromCurvedPoolData,
         BuyFromStaticPoolData, CreateCurvedPoolData, CreateStaticPoolData, CurvedPool,
-        SellFromCurvedPoolData, SellToStaticPoolData, StaticPool, StaticPoolConfig, Transmuter,
-        CURVED_POOL_PREFIX, TRANSMUTER_PREFIX,
+        GraduateCurvedPoolData, SellFromCurvedPoolData, SellToStaticPoolData, StaticPool,
+        StaticPoolConfig, Transmuter, CURVED_POOL_PREFIX, TRANSMUTER_PREFIX,
     },
     project::{project_address, CreateProjectData},
     PROGRAM_AUTHORITY,
@@ -404,13 +404,14 @@ impl<'a> ProjectsOperations<'a> {
         let client = self.solana_pool.builder();
         let program = client.program(pumpfun_cpi::ID)?;
         let bonding_curve = pumpfun::get_bonding_curve(&action.mint);
-        let associated_bonding_curve = get_associated_token_address(&action.mint, &bonding_curve);
+        let associated_bonding_curve = get_associated_token_address(&bonding_curve, &action.mint);
         let mut initial_curve =
             moonzip::pumpfun::CurveWrapper::initial(&pumpfun_meta.global_account);
 
         let mut buy = |user: Pubkey, sols: u64| {
             let buy_params = moonzip::pumpfun::BuyCalculator::new(&initial_curve).fixed_sols(sols);
             initial_curve.commit_buy(buy_params.max_sol_cost, buy_params.tokens);
+
             Result::<_, anyhow::Error>::Ok(
                 program
                     .request()
@@ -446,7 +447,7 @@ impl<'a> ProjectsOperations<'a> {
                 associated_bonding_curve,
                 global: *pumpfun::GLOBAL,
                 metadata: mpl::metadata_account(action.mint),
-                user: self.project.owner.clone().into(),
+                user: PROGRAM_AUTHORITY,
                 event_authority: pumpfun::EVENT_AUTHORITY,
 
                 program: pumpfun_cpi::ID,
@@ -464,15 +465,44 @@ impl<'a> ProjectsOperations<'a> {
             .instructions()?;
         result.append(&mut create_ixs);
 
+        if action.dev_purchase.is_some() || action.post_dev_purchase.is_some() {
+            result.push(create_associated_token_account(
+                &PROGRAM_AUTHORITY,
+                &PROGRAM_AUTHORITY,
+                &action.mint,
+                &anchor_spl::token::ID,
+            ));
+        }
         if let Some(purchase) = action.dev_purchase {
             result.append(&mut buy(PROGRAM_AUTHORITY, purchase.sols)?);
         };
-
         if let Some(purchase) = action.post_dev_purchase {
             result.append(&mut buy(PROGRAM_AUTHORITY, purchase.sols)?);
         };
+        result.append(&mut self.manual_project_graduate()?);
 
         Ok(result)
+    }
+
+    fn manual_project_graduate(&mut self) -> anyhow::Result<Vec<Instruction>> {
+        let client = self.solana_pool.builder();
+        let program = client.program(moonzip::ID)?;
+        let project = self.get_project_address();
+
+        let ix = program
+            .request()
+            .accounts(moonzip::accounts::GraduateProjectAccounts {
+                authority: moonzip::PROGRAM_AUTHORITY,
+                project,
+            })
+            .args(moonzip::instruction::ProjectGraduate {
+                _data: moonzip::project::GraduateProjectData {
+                    id: project_id(&self.project.id),
+                },
+            })
+            .instructions()?;
+
+        Ok(ix)
     }
 
     pub fn init_moonzip_pool(&mut self, action: CurveCreate) -> anyhow::Result<Vec<Instruction>> {
@@ -572,11 +602,13 @@ impl<'a> ProjectsOperations<'a> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
         let pool_address = curved_pool_address(self.curve_mint()?);
+        let project_id = project_id(&self.project.id);
 
         let ix = program
             .request()
             .accounts(moonzip::accounts::GraduateCurvedPoolAccounts {
                 authority: moonzip::PROGRAM_AUTHORITY,
+                project: project_address(&project_id),
                 fee: fee_address(),
                 funds_receiver: moonzip::PROGRAM_AUTHORITY,
                 pool: pool_address,
@@ -585,7 +617,9 @@ impl<'a> ProjectsOperations<'a> {
                 associated_token_program: anchor_spl::associated_token::ID,
                 token_program: anchor_spl::token::ID,
             })
-            .args(moonzip::instruction::GraduateCurvedPool {})
+            .args(moonzip::instruction::GraduateCurvedPool {
+                _data: GraduateCurvedPoolData { project_id },
+            })
             .instructions()?;
 
         Ok(ix)
@@ -885,71 +919,18 @@ impl<'a> ProjectsOperations<'a> {
         sols: u64,
         min_token_output: Option<u64>,
     ) -> anyhow::Result<Vec<Instruction>> {
-        let client = self.solana_pool.builder();
-        let program = client.program(moonzip::ID)?;
-
-        let project_id = project_id(&self.project.id);
-        let project_address = project_address(&project_id);
-
         let ixs = match self.project.stage {
-            Stage::OnStaticPool => {
-                let static_pool_mint = self
-                    .project
-                    .static_pool_mint()
-                    .ok_or_else(|| anyhow::anyhow!("invariant: no static pool mint"))?;
-                let pool = static_pool_address(static_pool_mint);
-                program
-                    .request()
-                    .accounts(moonzip::accounts::BuyFromStaticPoolAccounts {
-                        authority: moonzip::PROGRAM_AUTHORITY,
-                        fee: *FEE_ACCOUNT,
-                        project: project_address,
-                        user,
-                        mint: static_pool_mint,
-                        user_mint_account: get_associated_token_address(&user, &static_pool_mint),
-                        pool_mint_account: get_associated_token_address(&pool, &static_pool_mint),
-                        pool,
-                        system_program: solana_sdk::system_program::ID,
-                        token_program: anchor_spl::token::ID,
-                        associated_token_program: anchor_spl::associated_token::ID,
-                    })
-                    .args(moonzip::instruction::BuyFromStaticPool {
-                        data: BuyFromStaticPoolData { project_id, sols },
-                    })
-                    .instructions()?
-            }
+            Stage::OnStaticPool => self.buy_from_static_pool(user, sols)?,
             Stage::OnCurvePool => {
-                let curve_mint = self.curve_mint()?;
-                let curve_pool = get_curved_pool_address(curve_mint);
-
-                let mut ixs = vec![];
-                if self.project.deploy_schema.static_pool.is_some() {
-                    ixs.append(&mut self.transmute_idempotent(user)?);
+                self.buy_from_curve_pool(user, sols, min_token_output.unwrap_or(0))?
+            }
+            Stage::Graduated => {
+                // TODO: handle raydium detection and raydium purchases
+                if self.project.deploy_schema.curve_pool == CurveVariant::Pumpfun {
+                    self.buy_from_pumpfun(user, sols, min_token_output.unwrap_or(0))?
+                } else {
+                    bail!("request to buy from raydium, yet unimplemented")
                 }
-
-                program
-                    .request()
-                    .accounts(moonzip::accounts::BuyFromCurvedPoolAccounts {
-                        authority: moonzip::PROGRAM_AUTHORITY,
-                        project: project_address,
-                        fee: fee_address(),
-                        user,
-                        mint: curve_mint,
-                        user_token_account: get_associated_token_address(&user, &curve_mint),
-                        pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
-                        pool: curve_pool,
-                        system_program: solana_sdk::system_program::ID,
-                        token_program: anchor_spl::token::ID,
-                        associated_token_program: anchor_spl::associated_token::ID,
-                    })
-                    .args(moonzip::instruction::BuyFromCurvedPool {
-                        data: BuyFromCurvedPoolData {
-                            project_id,
-                            sols,
-                            min_token_output: min_token_output.unwrap_or_default(),
-                        },
-                    })
-                    .instructions()?
             }
             _ => bail!(
                 "unable to buy from project: stage mismatch: {:?}",
@@ -958,6 +939,94 @@ impl<'a> ProjectsOperations<'a> {
         };
 
         Ok(ixs)
+    }
+
+    fn buy_from_static_pool(&self, user: Pubkey, sols: u64) -> anyhow::Result<Vec<Instruction>> {
+        let client = self.solana_pool.builder();
+        let program = client.program(moonzip::ID)?;
+
+        let static_pool_mint = self
+            .project
+            .static_pool_mint()
+            .ok_or_else(|| anyhow::anyhow!("invariant: no static pool mint"))?;
+        let pool = static_pool_address(static_pool_mint);
+
+        let project_id = project_id(&self.project.id);
+        let project_address = project_address(&project_id);
+
+        Ok(program
+            .request()
+            .accounts(moonzip::accounts::BuyFromStaticPoolAccounts {
+                authority: moonzip::PROGRAM_AUTHORITY,
+                fee: *FEE_ACCOUNT,
+                project: project_address,
+                user,
+                mint: static_pool_mint,
+                user_mint_account: get_associated_token_address(&user, &static_pool_mint),
+                pool_mint_account: get_associated_token_address(&pool, &static_pool_mint),
+                pool,
+                system_program: solana_sdk::system_program::ID,
+                token_program: anchor_spl::token::ID,
+                associated_token_program: anchor_spl::associated_token::ID,
+            })
+            .args(moonzip::instruction::BuyFromStaticPool {
+                data: BuyFromStaticPoolData { project_id, sols },
+            })
+            .instructions()?)
+    }
+
+    fn buy_from_curve_pool(
+        &self,
+        user: Pubkey,
+        sols: u64,
+        min_token_output: u64,
+    ) -> anyhow::Result<Vec<Instruction>> {
+        let client = self.solana_pool.builder();
+        let program = client.program(moonzip::ID)?;
+
+        let curve_mint = self.curve_mint()?;
+        let curve_pool = get_curved_pool_address(curve_mint);
+
+        let mut ixs = vec![];
+        if self.project.deploy_schema.static_pool.is_some() {
+            ixs.append(&mut self.transmute_idempotent(user)?);
+        }
+
+        let project_id = project_id(&self.project.id);
+        let project_address = project_address(&project_id);
+
+        Ok(program
+            .request()
+            .accounts(moonzip::accounts::BuyFromCurvedPoolAccounts {
+                authority: moonzip::PROGRAM_AUTHORITY,
+                project: project_address,
+                fee: fee_address(),
+                user,
+                mint: curve_mint,
+                user_token_account: get_associated_token_address(&user, &curve_mint),
+                pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
+                pool: curve_pool,
+                system_program: solana_sdk::system_program::ID,
+                token_program: anchor_spl::token::ID,
+                associated_token_program: anchor_spl::associated_token::ID,
+            })
+            .args(moonzip::instruction::BuyFromCurvedPool {
+                data: BuyFromCurvedPoolData {
+                    project_id,
+                    sols,
+                    min_token_output,
+                },
+            })
+            .instructions()?)
+    }
+
+    fn buy_from_pumpfun(
+        &self,
+        _user: Pubkey,
+        _sols: u64,
+        _min_token_output: u64,
+    ) -> anyhow::Result<Vec<Instruction>> {
+        todo!()
     }
 
     pub fn sell(

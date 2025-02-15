@@ -49,6 +49,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cleanup previous environment if exists
+        run: docker compose -f dev/docker-compose.dev.yml down -v || echo "Environment is clear"
+
       - name: Build intermediate image
         uses: docker/bake-action@v6.3.0
         with:
@@ -60,3 +63,18 @@ jobs:
 
       - name: Run tests
         run: make ext-test
+
+      - name: Collect services logs
+        if: always()
+        run: docker compose -f dev/docker-compose.dev.yml logs --no-color >& ./services_logs.txt
+
+      - name: Archive services logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: services_logs
+          path: ./services_logs.txt
+
+      - name: Cleanup current environment
+        if: always()
+        run: docker compose -f dev/docker-compose.dev.yml down -v || echo "Environment is already shut"

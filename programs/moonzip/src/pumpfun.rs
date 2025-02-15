@@ -24,10 +24,6 @@ pub fn get_bonding_curve_pda(mint: &Pubkey) -> Option<Pubkey> {
     pda.map(|pubkey| pubkey.0)
 }
 
-fn constant(curve: &CurveWrapper) -> u128 {
-    curve.virtual_sol_reserves as u128 * curve.virtual_token_reserves as u128
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone)]
 pub struct CurveWrapper {
     pub virtual_token_reserves: u64,
@@ -49,11 +45,15 @@ impl CurveWrapper {
     }
 
     pub fn commit_buy(&mut self, sols: u64, tokens: u64) {
-        self.virtual_sol_reserves += sols;
+        self.real_token_reserves -= tokens;
         self.virtual_token_reserves -= tokens;
 
         self.real_sol_reserves += sols;
         self.virtual_sol_reserves += sols;
+    }
+
+    fn constant(&self) -> u128 {
+        self.virtual_sol_reserves as u128 * self.virtual_token_reserves as u128
     }
 }
 
@@ -79,20 +79,24 @@ impl<'a> BuyCalculator<'a> {
     }
 
     pub fn fixed_sols(&self, sols: u64) -> BuyParams {
-        let sols = BUY_FEE.accounting(sols);
+        let after_fee_taken = BUY_FEE.accounting(sols);
 
-        let constant = constant(self.curve);
+        let constant = self.curve.constant();
         let new_token_reserves =
-            constant / (self.curve.virtual_sol_reserves as u128 + sols as u128) + 1;
+            constant / (self.curve.virtual_sol_reserves as u128 + after_fee_taken as u128) + 1;
         let tokens =
             (self.curve.virtual_token_reserves as u128).saturating_sub(new_token_reserves) as u64;
         BuyParams {
             tokens,
+            // we place original sols amount there, because pumpfun includes *fee* into slippage.
+            // in other words, if total amount of sols greater then `max_sol_cost`, it would throw
+            // error.
             max_sol_cost: sols,
         }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct BuyParams {
     pub tokens: u64,
     pub max_sol_cost: u64,
@@ -118,7 +122,7 @@ impl<'a> SellCalculator<'a> {
 
     /// Shows how much tokens need to be sold to get a fixed amount of SOL
     pub fn fixed_sols(&self, sols: u64) -> u64 {
-        let constant = constant(self.curve);
+        let constant = self.curve.constant();
         let new_token_reserves =
             constant / (self.curve.virtual_sol_reserves as u128 - sols as u128) + 1;
         (new_token_reserves.saturating_sub(self.curve.virtual_token_reserves as u128)) as u64

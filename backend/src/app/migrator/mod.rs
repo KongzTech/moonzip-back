@@ -167,10 +167,17 @@ impl Migrator {
                 Some((project, account))
             });
         for (mut project, account) in iter {
+            let previous_stage = project.stage;
             let project_data = moonzip::project::Project::try_deserialize(&mut &account.data[..])?;
             let has_changed = project.apply_from_chain(project_data);
             if has_changed {
                 set_project_stage(self.tools.storage.deref(), project.id, project.stage).await?;
+                tracing::debug!(
+                    "synced project({}) stage {:?} -> {:?}",
+                    project.id,
+                    previous_stage,
+                    project.stage
+                )
             }
             if !migrator_target(&project) {
                 debug!(
