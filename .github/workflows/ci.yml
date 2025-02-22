@@ -17,6 +17,8 @@ jobs:
       options: --user root
     steps:
       - uses: actions/checkout@v3
+        with:
+          path: "moonzip-back-unit-text-codestyle"
       - name: Install yarn dependencies
         run: yarn install
       - name: Lint
@@ -29,6 +31,8 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v3
+        with:
+          path: "moonzip-back-ext-test"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
