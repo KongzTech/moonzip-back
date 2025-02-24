@@ -10,4 +10,5 @@ DROP TYPE IF EXISTS deploy_schema;
 DROP TYPE IF EXISTS curve_variant;
 DROP DOMAIN IF EXISTS balance;
 
+DROP TABLE IF EXISTS user_info;
 DROP TABLE IF EXISTS static_pool_chain_state;

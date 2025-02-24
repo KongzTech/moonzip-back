@@ -17,6 +17,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+  helius-mock:
+    image: moonzip/dev:latest
+    command: [ "yarn", "helius-mock" ]
+    networks:
+      - moonzip-dev
+    healthcheck:
+      test: [ "CMD-SHELL", "nc -z localhost 4000" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
   jito-mock:
     image: moonzip/dev:latest
     command: ["yarn", "jito-mock"]
@@ -93,6 +103,8 @@ services:
         condition: service_healthy
       jito-mock:
         condition: service_healthy
+      helius-mock:
+        condition: service_healthy
       app-chain-syncer:
         condition: service_started
   app-chain-syncer:
@@ -123,6 +135,8 @@ services:
       app-migrator:
         condition: service_started
       solana-test-validator:
+        condition: service_healthy
+      helius-mock:
         condition: service_healthy
 volumes:
   postgres:

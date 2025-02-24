@@ -39,6 +39,24 @@ pub enum ApiError {
     InvalidRequest(anyhow::Error),
     #[error("captcha is invalid: {}", .0)]
     InvalidCaptcha(anyhow::Error),
+
+    #[error("username is empty: {}", .0)]
+    EmptyUsername(anyhow::Error),
+
+    #[error("wallet address is empty: {}", .0)]
+    EmptyWalletAddress(anyhow::Error),
+
+    #[error("username existed: {}", .0)]
+    ExistedUsername(anyhow::Error),
+
+    #[error("Not found user: {}", .0)]
+    NotFoundUser(anyhow::Error),
+
+    #[error("Invalid username format: {}", .0)]
+    InvalidUsernameFormat(anyhow::Error),
+
+    #[error("NFT doesn't belong to user")]
+    NFTNotBelong2User(anyhow::Error),
 }
 
 impl ApiError {
@@ -48,6 +66,12 @@ impl ApiError {
             ApiError::JsonRejection(_) => 2,
             ApiError::InvalidRequest(_) => 3,
             ApiError::InvalidCaptcha(_) => 4,
+            ApiError::EmptyUsername(_) => 10,
+            ApiError::EmptyWalletAddress(_) => 11,
+            ApiError::ExistedUsername(_) => 12,
+            ApiError::NotFoundUser(_) => 13,
+            ApiError::InvalidUsernameFormat(_) => 14,
+            ApiError::NFTNotBelong2User(_) => 15,
         }
     }
 }
@@ -103,6 +127,12 @@ impl IntoResponse for ApiError {
             ApiError::JsonRejection(rejection) => (rejection.status(), rejection.body_text()),
             ApiError::InvalidRequest(err) => (StatusCode::BAD_REQUEST, err.to_string()),
             ApiError::InvalidCaptcha(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::EmptyUsername(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::EmptyWalletAddress(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::ExistedUsername(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::NotFoundUser(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::InvalidUsernameFormat(err) => (StatusCode::BAD_REQUEST, err.to_string()),
+            ApiError::NFTNotBelong2User(err) => (StatusCode::BAD_REQUEST, err.to_string()),
         };
 
         (status, AppJson(ErrorResponse { message, code })).into_response()

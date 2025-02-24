@@ -1,4 +1,5 @@
-import { BN, Program } from "@coral-xyz/anchor";
+import * as anchor from "@coral-xyz/anchor";
+import { BN } from "@coral-xyz/anchor";
 import { components, paths } from "../../clients/backend_client";
 
 import {
@@ -6,7 +7,6 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   Transaction,
-  VersionedTransaction,
 } from "@solana/web3.js";
 import { expect } from "chai";
 import {
@@ -15,13 +15,9 @@ import {
   devLockEscrow,
   expectNoATA,
   getProvider,
-  provideGlobalConfig,
   tokenBalance,
 } from "../utils/utils";
-import * as anchor from "@coral-xyz/anchor";
-import fs from "fs";
 import createClient from "openapi-fetch";
-import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 import {
   currentTS,
   delay,
@@ -32,10 +28,7 @@ import {
   withErrorHandling,
   withTimeout,
 } from "../utils/helpers";
-import {
-  getAssociatedTokenAddressSync,
-  getMinimumBalanceForRentExemptAccount,
-} from "@solana/spl-token";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 
 const imagePath = "./tests/data/moon.png";
 const apiHost = process.env.MOONZIP_API_HOST || "http://app-api:8080";

@@ -1,4 +1,5 @@
 use super::jito::{JitoClient, JitoClientConfig};
+use crate::solana::helius::{HeliusClient, HeliusClientConfig};
 use crate::utils::{
     keypair::SaneKeypair,
     limiter::{LimiterGuard, RateLimitConfig},
@@ -14,12 +15,14 @@ use std::sync::{atomic, Arc};
 pub struct SolanaPoolConfig {
     pub rpc_clients: Vec<SolanaClientConfig>,
     pub jito_clients: Vec<JitoClientConfig>,
+    pub helius_client: Vec<HeliusClientConfig>,
 }
 
 #[derive(Clone)]
 pub struct SolanaPool {
     rpc_clients: Arc<Balancer<SolanaRpcClient>>,
     jito_clients: Arc<Balancer<JitoClient>>,
+    helius_clients: Arc<Balancer<HeliusClient>>,
 }
 
 impl SolanaPool {
@@ -34,9 +37,15 @@ impl SolanaPool {
             .iter()
             .map(|client_cfg| JitoClient::new(client_cfg.clone()))
             .collect::<Vec<_>>();
+        let helius_client = cfg
+            .helius_client
+            .iter()
+            .map(|client_cfg| HeliusClient::new(client_cfg.clone()))
+            .collect::<Vec<_>>();
         Ok(Self {
             rpc_clients: Arc::new(Balancer::new(rpc_clients)),
             jito_clients: Arc::new(Balancer::new(jito_clients)),
+            helius_clients: Arc::new(Balancer::new(helius_client)),
         })
     }
 
@@ -46,6 +55,10 @@ impl SolanaPool {
 
     pub fn jito_client(&self) -> &JitoClient {
         self.jito_clients.next()
+    }
+
+    pub fn helius_client(&self) -> &HeliusClient {
+        self.helius_clients.next()
     }
 
     pub fn builder(&self) -> anchor_client::Client<SaneKeypair> {

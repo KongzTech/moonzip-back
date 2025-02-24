@@ -123,8 +123,23 @@ CREATE TABLE token_meta (
 CREATE INDEX idx_project_owner ON project(owner);
 CREATE INDEX idx_project_created_at ON project(created_at);
 
+CREATE TABLE user_info
+(
+    wallet_address    pubkey NOT NULL PRIMARY KEY UNIQUE,
+    username          VARCHAR(255) NOT NULL UNIQUE,
+    display_name      VARCHAR(255),
+    image_url         VARCHAR(255),
+    nft_address       pubkey,
+    last_active       BIGINT,
+    created_at        TIMESTAMPTZ  NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMPTZ
+);
+
+create index idx_user_info_wallet_address on user_info (wallet_address);
+create index idx_user_info_username on user_info (username);
+
 --- CHAIN STATES
 CREATE TABLE static_pool_chain_state (
-    project_id UUID PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
-    collected_lamports balance
+     project_id UUID PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
+     collected_lamports balance
 )

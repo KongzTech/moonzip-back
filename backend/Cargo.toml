@@ -25,12 +25,12 @@ rayon = "1"
 
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = [
-  "postgres",
-  "runtime-tokio-rustls",
-  "macros",
-  "rust_decimal",
-  "uuid",
-  "chrono",
+    "postgres",
+    "runtime-tokio-rustls",
+    "macros",
+    "rust_decimal",
+    "uuid",
+    "chrono",
 ] }
 rust_decimal = { version = "1.36", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -56,20 +56,20 @@ anchor-spl = { version = "0.30.1", features = ["associated_token", "token"] }
 spl-token = { version = "4" }
 mpl-token-metadata = { version = "4.1" }
 pumpfun-cpi = { path = "../integrations/pumpfun-cpi", features = [
-  "cpi",
-  "no-entrypoint",
+    "cpi",
+    "no-entrypoint",
 ] }
 locker = { git = "https://github.com/jup-ag/jup-lock.git", features = [
   "cpi",
   "no-entrypoint",
 ], rev = "9c41d62c47a571a6492a715c7c252d0b8570ab7e" }
 raydium_amm = { git = "https://github.com/decr1x/raydium-amm.git", features = [
-  "no-entrypoint",
+    "no-entrypoint",
 ] }
 serum_dex = { git = "https://github.com/openbook-dex/program.git", default-features = false, features = [
-  "no-entrypoint",
-  "client",
-  "program",
+    "no-entrypoint",
+    "client",
+    "program",
 ] }
 borsh = "=0.10.4"
 
@@ -88,6 +88,7 @@ tower-http = { version = "0.6", features = ["trace", "cors"] }
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 http = "1"
 ed25519-dalek = "1"
+rustrict = "=0.1.42"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3

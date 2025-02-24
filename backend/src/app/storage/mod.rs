@@ -4,6 +4,7 @@ use sqlx::query;
 
 pub mod misc;
 pub mod project;
+pub mod user_info;
 
 pub type DB = sqlx::Postgres;
 pub type DBTransaction<'a> = sqlx::Transaction<'a, DB>;

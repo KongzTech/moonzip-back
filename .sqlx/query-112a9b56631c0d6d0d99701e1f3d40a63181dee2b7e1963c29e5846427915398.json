@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select  u.wallet_address as \"wallet_address: _\",\n                       u.username,\n                       u.display_name,\n                       u.image_url,\n                       u.nft_address AS \"nft_address?: _\",\n                       u.last_active,\n                       u.created_at,\n                       u.updated_at\n                from user_info u\n                where wallet_address = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "wallet_address: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "image_url",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "nft_address?: _",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_active",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "112a9b56631c0d6d0d99701e1f3d40a63181dee2b7e1963c29e5846427915398"
+}

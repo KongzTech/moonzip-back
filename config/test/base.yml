@@ -19,6 +19,13 @@ solana_pool:
     - base_url: "http://jito-mock:13000"
     - base_url: "http://jito-mock:13000"
     - base_url: "http://jito-mock:13000"
+  helius_client:
+    - client:
+        api_key: "b88f23f9-e798-490b-8a09-15d85ad731ec"
+        url: "http://helius-mock:4000"
+    - client:
+        api_key: "a908e623-2c29-4d07-b4b6-684f09dd772e"
+        url: "http://helius-mock:4000"
 fetchers:
   solana_meta:
     tick_interval: 1s

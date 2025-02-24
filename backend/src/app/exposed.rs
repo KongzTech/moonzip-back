@@ -11,9 +11,11 @@ use serde_with::{serde_as, DisplayFromStr};
 use services_common::{utils::serialize_tx_bs64, TZ};
 use solana_sdk::{pubkey::Pubkey, signer::Signer as _, transaction::Transaction};
 use std::time::Duration;
+use storage::user_info::StoredUserInfo;
 use tokio::io::AsyncRead;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
+use validator::Validate;
 
 #[serde_as]
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
@@ -53,6 +55,24 @@ pub struct StoredProjectInfo {
     pub created_at: DateTime<TZ>,
 }
 
+#[serde_as]
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInfo {
+    #[serde_as(as = "DisplayFromStr")]
+    #[schema(value_type = String)]
+    pub wallet_address: Pubkey,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub image_url: Option<String>,
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[schema(value_type = String)]
+    pub nft_address: Option<Pubkey>,
+    pub last_active: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 impl TryFrom<StoredProjectInfo> for PublicProject {
     type Error = anyhow::Error;
 
@@ -83,6 +103,23 @@ impl TryFrom<StoredProjectInfo> for PublicProject {
             dev_lock_base: project
                 .dev_lock_keypair
                 .map(|key| key.to_keypair().pubkey()),
+        })
+    }
+}
+
+impl TryFrom<StoredUserInfo> for UserInfo {
+    type Error = anyhow::Error;
+
+    fn try_from(stored: StoredUserInfo) -> Result<Self, Self::Error> {
+        Ok(UserInfo {
+            wallet_address: stored.wallet_address.to_pubkey(),
+            username: stored.username,
+            display_name: stored.display_name,
+            image_url: stored.image_url,
+            nft_address: stored.nft_address.map(|pubkey| pubkey.to_pubkey()),
+            last_active: stored.last_active,
+            created_at: stored.created_at.unwrap().to_string(),
+            updated_at: stored.updated_at.unwrap().to_string(),
         })
     }
 }
@@ -291,4 +328,52 @@ impl DevLockPeriod {
         }
         Self::Interval { interval: secs }
     }
+}
+
+#[serde_as]
+#[derive(Debug, Serialize, Validate, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeUserInfoRequest {
+    #[serde_as(as = "DisplayFromStr")]
+    #[schema(value_type = String)]
+    pub wallet_address: Pubkey,
+
+    #[validate(length(min = 1, message = "Username cannot be empty"))]
+    pub username: String,
+
+    pub display_value: String,
+
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    #[schema(value_type = String)]
+    pub nft_address: Option<Pubkey>,
+}
+
+#[serde_as]
+#[derive(Debug, Serialize, Validate, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUserInformationRequest {
+    #[serde_as(as = "DisplayFromStr")]
+    #[schema(value_type = String)]
+    pub wallet_address: Pubkey,
+}
+
+#[serde_as]
+#[derive(Debug, Serialize, Validate, Deserialize, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOwnedNFTsRequest {
+    #[serde_as(as = "DisplayFromStr")]
+    #[schema(value_type = String)]
+    pub owner_address: Pubkey,
+    #[validate(range(
+        min = 1,
+        max = 1000,
+        message = "Page must be greater than 0 and less than 1000"
+    ))]
+    pub page: Option<u32>,
+    #[validate(range(
+        min = 1,
+        max = 1000,
+        message = "Limit must be greater than 0 and less than 1000"
+    ))]
+    pub limit: Option<u32>,
 }

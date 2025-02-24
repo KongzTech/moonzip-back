@@ -84,8 +84,52 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/user/owned-nfts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_owned_nfts"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/user/get": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get: operations["get_user_info"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/user/upsert": {
+    get?: never;
+    put?: never;
+    post: operations["upsert_user_info"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
+
 export type webhooks = Record<string, never>;
+
 export interface components {
   schemas: {
     BuyRequest: {
@@ -199,14 +243,125 @@ export interface components {
       /** Format: int64 */
       launchPeriod: number;
     };
+    GetOwnedNFTResponse: {
+      jsonrpc: string;
+      result: components["schemas"]["GetOwnedNFTResponseDetail"];
+    };
+    GetOwnedNFTResponseDetail: {
+      total: number;
+      limit: number;
+      page: number;
+      items: components["schemas"]["NFTItem"][];
+    };
+    NFTItem: {
+      interface: string;
+      id: string;
+      content: components["schemas"]["NFTContent"];
+      authorities: components["schemas"]["Authority"][];
+      compression: components["schemas"]["Compression"];
+      grouping: components["schemas"]["Grouping"][];
+      royalty: components["schemas"]["Royalty"];
+      creators: components["schemas"]["Creator"][];
+      ownership: components["schemas"]["Ownership"];
+      supply: components["schemas"]["Supply"];
+      mutable: boolean;
+      burnt: boolean;
+    };
+    NFTContent: {
+      json_uri: string;
+      files: components["schemas"]["NFTFile"][];
+      metadata: components["schemas"]["Metadata"];
+      links: components["schemas"]["Links"];
+    };
+    NFTFile: {
+      uri: string;
+      cdn_uri: string;
+      mime: string;
+    };
+    Metadata: {
+      description: string;
+      name: string;
+      symbol: string;
+      token_standard: string;
+      attributes: components["schemas"]["Attribute"][];
+    };
+    Attribute: {
+      value: string;
+      trait_type: string;
+    };
+    Authority: {
+      address: string;
+      scopes: string[];
+    };
+    Compression: {
+      eligible: boolean;
+      compressed: boolean;
+      data_hash: string;
+      creator_hash: string;
+      asset_hash: string;
+      tree: string;
+      seq: number;
+      leaf_id: number;
+    };
+    Grouping: {
+      group_key: string;
+      group_value: string;
+    };
+    Royalty: {
+      royalty_model: string;
+      target: string;
+      percent: number;
+      basis_points: number;
+      primary_sale_happened: boolean;
+      locked: boolean;
+    };
+    Creator: {
+      address: string;
+      share: number;
+      verified: boolean;
+    };
+    Ownership: {
+      frozen: boolean;
+      delegated: boolean;
+      delegate: string;
+      ownership_model: string;
+      owner: string;
+    };
+    Supply: {
+      print_max_supply: number;
+      print_current_supply: number;
+      edition_nonce: number;
+    };
+    Links: {
+      external_url: string;
+      image: string;
+    };
+    UpsertCustomerRequestBody: {
+      walletAddress: string;
+      username: string;
+      displayValue: string;
+      nftAddress: string;
+    };
+    GetCustomerInfoResponse: {
+      walletAddress: string;
+      username: string;
+      displayName: string;
+      imageUrl: string;
+      lastActive: number;
+      createdAt: string;
+      updatedAt: string;
+    };
   };
+
   responses: never;
   parameters: never;
   requestBodies: never;
   headers: never;
   pathItems: never;
 }
+
 export type $defs = Record<string, never>;
+
 export interface operations {
   buy: {
     parameters: {
@@ -378,6 +533,116 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SellResponse"];
+        };
+      };
+      /** @description Logical error due to user input */
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Internal server error, contact support */
+      "5XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  get_owned_nfts: {
+    parameters: {
+      query: {
+        ownerAddress: String;
+        page: number;
+        limit: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successfully fetched project */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GetOwnedNFTResponse"];
+        };
+      };
+      /** @description Logical error due to user input */
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Internal server error, contact support */
+      "5XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  get_user_info: {
+    parameters: {
+      query: {};
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: {};
+    responses: {
+      /** @description Successfully fetched project */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GetCustomerInfoResponse"];
+        };
+      };
+      /** @description Logical error due to user input */
+      "4XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Internal server error, contact support */
+      "5XX": {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+    };
+  };
+  upsert_user_info: {
+    parameters: {
+      query: {};
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["UpsertCustomerRequestBody"];
+      };
+    };
+    responses: {
+      /** @description Successfully fetched project */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GetCustomerInfoResponse"];
         };
       };
       /** @description Logical error due to user input */

@@ -1,3 +1,6 @@
+use crate::app::exposed::{ChangeUserInfoRequest, GetUserInformationRequest};
+use crate::app::exposed::{GetOwnedNFTsRequest, UserInfo};
+use crate::app::storage::misc::StoredPubkey;
 use crate::solana::SolanaKeys;
 use anyhow::bail;
 use exposed::{
@@ -9,10 +12,15 @@ use instructions::{
     mpl::{SampleMetadata, SAMPLE_MPL_URI},
     InstructionsBuilder,
 };
+use rustrict::CensorStr;
+use services_common::api::response::ApiError;
+use services_common::solana::helius::{GetAssetNFTsResponse, GetOwnedNFTsResponse};
+use services_common::solana::pool::SolanaPool;
 use services_common::utils::period_fetch::DataReceiver;
 use solana_sdk::{signature::Keypair, signer::Signer, transaction::Transaction};
 use sqlx::query_as;
 use std::{pin::pin, time::Duration};
+use storage::user_info::StoredUserInfo;
 use storage::{project::StoredProject, StorageClient};
 use tokio::io::AsyncRead;
 use tracing::debug;
@@ -30,6 +38,7 @@ pub struct App {
     pub instructions_builder: InstructionsBuilder,
     pub keys: SolanaKeys,
     pub solana_meta: DataReceiver<instructions::solana::Meta>,
+    pub solana_pool: SolanaPool,
 }
 
 impl App {
@@ -253,5 +262,158 @@ impl App {
         .fetch_one(&self.storage.pool)
         .await?;
         Ok(project)
+    }
+
+    pub async fn upsert_user_info(
+        &self,
+        request: ChangeUserInfoRequest,
+    ) -> anyhow::Result<UserInfo, ApiError> {
+        let mut image_url: String = String::from("");
+        let mut stored_nft_address: Option<StoredPubkey> = None;
+        if request.nft_address.is_some() {
+            let response = self
+                .solana_pool
+                .helius_client()
+                .get_nft_info(
+                    request.nft_address.unwrap().to_string(),
+                    request.wallet_address.to_string(),
+                )
+                .await?;
+            if self
+                .retrieve_owner_address_from_asset(response.clone())
+                .await?
+                != request.wallet_address.to_string()
+            {
+                return Err(ApiError::NFTNotBelong2User(anyhow::anyhow!(
+                    "NFT doesn't belong to this user"
+                )));
+            }
+            image_url = self.retrieve_image_url_from_asset(response.clone()).await?;
+            stored_nft_address = request.nft_address.map(|pubkey| pubkey.into());
+        }
+
+        let stored_user_info = StoredUserInfo {
+            wallet_address: request.wallet_address.into(),
+            username: request.username,
+            display_name: Some(request.display_value),
+            image_url: Some(image_url),
+            nft_address: stored_nft_address,
+            last_active: None,
+            created_at: Some(chrono::Utc::now()),
+            updated_at: Some(chrono::Utc::now()),
+        };
+
+        if CensorStr::is_inappropriate(&*stored_user_info.username) {
+            return Err(ApiError::InvalidUsernameFormat(anyhow::anyhow!(
+                "Username contains bad words"
+            )));
+        }
+
+        let tx = self.storage.serializable_tx().await?;
+        let updated_user = sqlx::query_as!(
+                StoredUserInfo,
+                r#"
+                    INSERT INTO user_info (wallet_address, username, image_url, nft_address, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, now(), now())
+                    ON CONFLICT (wallet_address)
+                    DO UPDATE SET
+                        username = EXCLUDED.username,
+                        image_url = EXCLUDED.image_url,
+                        nft_address = EXCLUDED.nft_address,
+                        updated_at = now()
+                    RETURNING wallet_address as "wallet_address: _", username, image_url, nft_address as "nft_address?: _", display_name, last_active, created_at, updated_at
+                "#,
+                stored_user_info.wallet_address as _,
+                stored_user_info.username as _,
+                stored_user_info.image_url as _,
+                stored_user_info.nft_address as _
+            )
+            .fetch_one(&self.storage.pool)
+            .await
+            .map_err(|_e| {
+                ApiError::ExistedUsername(anyhow::anyhow!(
+                "Failed to retrieve updated user information for wallet: {}",
+                request.wallet_address))
+            })?;
+
+        tx.commit()
+            .await
+            .map_err(|_e| ApiError::Internal(anyhow::anyhow!("Failed to commit transaction")))?;
+
+        let user_info = UserInfo::try_from(updated_user).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!("Failed to convert stored user info: {}", e))
+        })?;
+
+        Ok(user_info)
+    }
+
+    pub async fn get_user_info_by_address(
+        &self,
+        request: GetUserInformationRequest,
+    ) -> anyhow::Result<UserInfo, ApiError> {
+        let stored_pub_key: StoredPubkey = request.wallet_address.into();
+
+        let user = query_as!(
+            StoredUserInfo,
+            r#"select  u.wallet_address as "wallet_address: _",
+                       u.username,
+                       u.display_name,
+                       u.image_url,
+                       u.nft_address AS "nft_address?: _",
+                       u.last_active,
+                       u.created_at,
+                       u.updated_at
+                from user_info u
+                where wallet_address = $1"#,
+            stored_pub_key as _
+        )
+        .fetch_one(&self.storage.pool)
+        .await
+        .map_err(|_e| ApiError::NotFoundUser(anyhow::anyhow!("Not found user by address",)))?;
+
+        let user_info = UserInfo::try_from(user).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!("Failed to convert stored user info: {}", e))
+        })?;
+
+        Ok(user_info)
+    }
+
+    pub async fn get_owned_nfts_by_address(
+        &self,
+        request: GetOwnedNFTsRequest,
+    ) -> anyhow::Result<GetOwnedNFTsResponse> {
+        self.solana_pool
+            .helius_client()
+            .get_owned_nfts(
+                request.owner_address.to_string(),
+                request.page,
+                request.limit,
+            )
+            .await
+    }
+
+    async fn retrieve_image_url_from_asset(
+        &self,
+        asset_response: GetAssetNFTsResponse,
+    ) -> anyhow::Result<String> {
+        asset_response
+            .result
+            .unwrap()
+            .content
+            .links
+            .image
+            .ok_or_else(|| anyhow::anyhow!("Image url is missing from response"))
+    }
+
+    async fn retrieve_owner_address_from_asset(
+        &self,
+        asset_response: GetAssetNFTsResponse,
+    ) -> anyhow::Result<String> {
+        asset_response
+            .result
+            .unwrap()
+            .ownership
+            .owner
+            .ok_or_else(|| anyhow::anyhow!("Owner address is missing from response"))
     }
 }

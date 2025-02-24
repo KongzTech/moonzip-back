@@ -71,6 +71,7 @@ pub async fn main() -> anyhow::Result<()> {
         instructions_builder,
         keys,
         solana_meta,
+        solana_pool,
     });
     let api_state = AppState::new(app, cfg.api);
     info!("Starting API server");
