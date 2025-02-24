@@ -1,5 +1,5 @@
 migrator:
-  tick_interval: 3s
+  tick_interval: 200ms
   mzip_ipfs:
     gateway: "moon"
     api_key: "mock-api-key"

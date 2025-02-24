@@ -168,6 +168,7 @@ async function waitForProject(
   projectId: string,
   stage?: components["schemas"]["PublicProjectStage"]
 ) {
+  console.log(`started waiting for project at ${new Date().toUTCString()}`);
   let start = time();
   while (time() - start < 30000) {
     let projectResponse = await client.GET("/api/project/get", {
@@ -194,7 +195,9 @@ async function waitForProject(
     }
     await delay(2000);
   }
-  throw new Error("project is not ready in 30 seconds");
+  throw new Error(
+    `project is not ready in 30 seconds at: ${new Date().toUTCString()}`
+  );
 }
 
 async function testBuySellStaticPool(
@@ -223,10 +226,14 @@ async function testBuySellStaticPool(
   let projectMeta = sampleCreateProjectMeta(owner, schema);
   let projectResult = await createProject(owner, projectMeta);
 
+  console.log("Sent transaction for project creation, waiting for status");
+
   let project = await waitForProject(
     projectResult.projectId,
     "staticPoolActive"
   );
+
+  console.log("Static pool is active, begin to buy");
 
   expect(project.name).to.equal(projectMeta.meta.name);
   expect(project.description).to.equal(projectMeta.meta.description);

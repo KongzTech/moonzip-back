@@ -1,5 +1,6 @@
 #!/bin/bash
 solana-test-validator --reset -q --rpc-port 18899 \
+	--geyser-plugin-config config/test/geyser_grpc.json \
 	--account 4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf tests/external/pumpfun/global.json \
 	--account Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1 tests/external/pumpfun/event_authority.json \
 	--account TSLvdd1pWpHVjahSpsvCXUbgwsL3JAcvokwaKt1eokM tests/external/pumpfun/mint_authority.json \

@@ -8,6 +8,11 @@ use once_cell::sync::Lazy;
 use services_common::{solana::pool::SolanaPool, utils::period_fetch::FetchExecutor};
 use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
 
+use super::utils::anchor_event_authority;
+
+pub static MOONZIP_EVENT_AUTHORITY: Lazy<Pubkey> =
+    Lazy::new(|| anchor_event_authority(&moonzip::ID));
+
 pub struct MetaFetcher {
     pub pool: SolanaPool,
 }

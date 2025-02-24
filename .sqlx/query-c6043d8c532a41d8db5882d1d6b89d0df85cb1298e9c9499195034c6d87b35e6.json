@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE static_pool_chain_state\n                SET collected_lamports = $2\n                WHERE project_id = $1;\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "balance",
+            "kind": {
+              "Domain": "Numeric"
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c6043d8c532a41d8db5882d1d6b89d0df85cb1298e9c9499195034c6d87b35e6"
+}

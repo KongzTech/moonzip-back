@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use const_str_to_pubkey::str_to_pubkey;
 pub mod common;
 pub mod curved_pool;
+pub mod events;
 pub mod fee;
 pub mod project;
 pub mod pumpfun;

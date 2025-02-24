@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE project\n                SET stage = $2\n                WHERE project.id = $1;\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "project_stage",
+            "kind": {
+              "Enum": [
+                "Created",
+                "Confirmed",
+                "OnStaticPool",
+                "StaticPoolClosed",
+                "OnCurvePool",
+                "CurvePoolClosed",
+                "Graduated"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "af1f5a401058236b3fcdf2ca5d86a4d5f6521b6e299c16178f0ce52d6d749efe"
+}

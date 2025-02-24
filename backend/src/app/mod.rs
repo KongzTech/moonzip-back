@@ -18,6 +18,7 @@ use tokio::io::AsyncRead;
 use tracing::debug;
 use uuid::Uuid;
 
+pub mod chain_sync;
 pub mod exposed;
 pub mod instructions;
 pub mod keys_loader;
@@ -116,6 +117,10 @@ impl App {
         )
         .execute(&mut *tx)
         .await?;
+
+        sqlx::query!("INSERT INTO project_migration_lock VALUES ($1)", project.id)
+            .execute(&mut *tx)
+            .await?;
 
         sqlx::query!(
             "INSERT INTO token_meta VALUES ($1, $2, $3, $4, $5, $6, $7)",

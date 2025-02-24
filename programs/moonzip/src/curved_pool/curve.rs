@@ -35,11 +35,11 @@ impl Sizable for CurveConfig {
     AnchorDeserialize, AnchorSerialize, Debug, Clone, Copy, PartialEq, PartialOrd, Default,
 )]
 pub struct CurveState {
-    virtual_token_reserves: u64,
-    virtual_sol_reserves: u64,
-    real_token_reserves: u64,
-    real_sol_reserves: u64,
-    total_token_supply: u64,
+    pub virtual_token_reserves: u64,
+    pub virtual_sol_reserves: u64,
+    pub real_token_reserves: u64,
+    pub real_sol_reserves: u64,
+    pub total_token_supply: u64,
 }
 
 impl Sizable for CurveState {

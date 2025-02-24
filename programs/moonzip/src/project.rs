@@ -1,4 +1,4 @@
-use crate::{ensure_account_size, utils::Sizable, PROGRAM_AUTHORITY};
+use crate::{ensure_account_size, events::ProjectChangedEvent, utils::Sizable, PROGRAM_AUTHORITY};
 use anchor_lang::{prelude::*, system_program};
 use derive_more::derive::{From, Into};
 
@@ -17,6 +17,7 @@ pub fn create(ctx: Context<CreateProjectAccounts>, data: CreateProjectData) -> R
         latch: ProjectLatch::new(data.creator_deposit),
         bump: ctx.bumps.project,
     });
+    emit_cpi!(ctx.accounts.project.set_stage(ProjectStage::Created)?);
 
     system_program::transfer(
         CpiContext::new(
@@ -34,7 +35,7 @@ pub fn create(ctx: Context<CreateProjectAccounts>, data: CreateProjectData) -> R
 
 pub fn graduate(ctx: Context<GraduateProjectAccounts>) -> Result<()> {
     ctx.accounts.project.ensure_can_graduate()?;
-    ctx.accounts.project.stage = ProjectStage::Graduated;
+    emit_cpi!(ctx.accounts.project.set_stage(ProjectStage::Graduated)?);
 
     Ok(())
 }
@@ -53,6 +54,7 @@ pub fn unlock_latch(ctx: Context<ProjectUnlockLatchAccounts>) -> Result<()> {
     AnchorSerialize,
     AnchorDeserialize,
     Clone,
+    Copy,
     Debug,
     Into,
     From,
@@ -87,6 +89,17 @@ pub struct Project {
 }
 
 impl Project {
+    pub fn set_stage(&mut self, stage: ProjectStage) -> Result<ProjectChangedEvent> {
+        let event = ProjectChangedEvent {
+            project_id: self.id,
+            from_stage: self.stage,
+            to_stage: stage,
+        };
+        self.stage = stage;
+
+        Ok(event)
+    }
+
     pub fn ensure_can_create_static_pool(&self) -> Result<()> {
         if !self.schema.use_static_pool {
             return err!(ProjectError::SchemaMismatch);
@@ -140,7 +153,9 @@ impl Sizable for Project {
 
 ensure_account_size!(Project, 54);
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord,
+)]
 pub enum ProjectStage {
     Created,
 
@@ -159,6 +174,7 @@ impl Sizable for ProjectStage {
     }
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: CreateProjectData)]
 pub struct CreateProjectAccounts<'info> {
@@ -186,6 +202,7 @@ pub struct CreateProjectData {
     pub creator_deposit: u64,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: GraduateProjectData)]
 pub struct GraduateProjectAccounts<'info> {

@@ -74,5 +74,5 @@ pub async fn main() -> anyhow::Result<()> {
     )
     .await?;
     handle.await?;
-    Ok(())
+    anyhow::bail!("migrator unexpectedly terminated the loop")
 }

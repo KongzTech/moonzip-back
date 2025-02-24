@@ -1,6 +1,7 @@
 use crate::{
     common::PoolCloseConditions,
     ensure_account_size,
+    events::{StaticPoolBuyEvent, StaticPoolSellEvent},
     project::{ProjectId, PROJECT_PREFIX},
     utils::Sizable,
     FeeAccount, Project, ProjectStage, FEE_ACCOUNT_PREFIX, PROGRAM_AUTHORITY,
@@ -31,14 +32,20 @@ pub fn create(ctx: Context<CreateStaticPoolAccounts>, data: CreateStaticPoolData
         bump: ctx.bumps.pool,
     });
 
-    ctx.accounts.project.stage = ProjectStage::StaticPoolActive;
+    emit_cpi!(ctx
+        .accounts
+        .project
+        .set_stage(ProjectStage::StaticPoolActive)?);
 
     Ok(())
 }
 
 pub fn graduate(ctx: Context<GraduateStaticPoolAccounts>) -> Result<()> {
     if ctx.accounts.pool.close_if_needed() {
-        ctx.accounts.project.stage = ProjectStage::StaticPoolClosed;
+        emit_cpi!(ctx
+            .accounts
+            .project
+            .set_stage(ProjectStage::StaticPoolClosed)?);
     }
 
     if ctx.accounts.pool.state != StaticPoolState::Closed {
@@ -81,8 +88,21 @@ pub fn buy(ctx: Context<BuyFromStaticPoolAccounts>, data: BuyFromStaticPoolData)
         .checked_add(sols_after_fee)
         .expect("invariant: lamports amount is out of bounds");
 
+    let event = StaticPoolBuyEvent {
+        project_id: ctx.accounts.project.id,
+        user: ctx.accounts.user.key(),
+
+        new_collected_sols: ctx.accounts.pool.collected_lamports,
+        request_sols: data.sols,
+        output_tokens: sols_after_fee,
+    };
+    emit_cpi!(event);
+
     if ctx.accounts.pool.close_if_needed() {
-        ctx.accounts.project.stage = ProjectStage::StaticPoolClosed;
+        emit_cpi!(ctx
+            .accounts
+            .project
+            .set_stage(ProjectStage::StaticPoolClosed)?);
     }
 
     let balance_to_mint = sols_after_fee.saturating_sub(ctx.accounts.pool_mint_account.amount);
@@ -145,6 +165,7 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
     let input = data.tokens;
     let output = data.tokens;
     let fee = ctx.accounts.fee.config.on_sell.part_of(output);
+    let output_after_fee = output.saturating_sub(fee);
 
     ctx.accounts.pool.collected_lamports = ctx
         .accounts
@@ -152,6 +173,16 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
         .collected_lamports
         .checked_sub(output)
         .expect("invariant: lamports amount becomes negative");
+
+    let event = StaticPoolSellEvent {
+        project_id: ctx.accounts.project.id,
+        user: ctx.accounts.user.key(),
+
+        new_collected_sols: ctx.accounts.pool.collected_lamports,
+        request_tokens: input,
+        output_sols: output_after_fee,
+    };
+    emit_cpi!(event);
 
     anchor_spl::token::transfer(
         CpiContext::new(
@@ -166,7 +197,7 @@ pub fn sell(ctx: Context<SellToStaticPoolAccounts>, data: SellToStaticPoolData) 
     )?;
 
     ctx.accounts.pool.sub_lamports(output)?;
-    ctx.accounts.user.add_lamports(output.saturating_sub(fee))?;
+    ctx.accounts.user.add_lamports(output_after_fee)?;
     ctx.accounts.fee.add_lamports(fee)?;
 
     Ok(())
@@ -264,6 +295,7 @@ pub struct CreateStaticPoolData {
     pub project_id: ProjectId,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: CreateStaticPoolData)]
 pub struct CreateStaticPoolAccounts<'info> {
@@ -310,6 +342,7 @@ pub struct BuyFromStaticPoolData {
     pub sols: u64,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: BuyFromStaticPoolData)]
 pub struct BuyFromStaticPoolAccounts<'info> {
@@ -366,6 +399,7 @@ pub struct SellToStaticPoolData {
     pub tokens: u64,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: SellToStaticPoolData)]
 pub struct SellToStaticPoolAccounts<'info> {
@@ -415,6 +449,7 @@ pub struct SellToStaticPoolAccounts<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct GraduateStaticPoolAccounts<'info> {
     #[account(mut, constraint = authority.key == &PROGRAM_AUTHORITY)]

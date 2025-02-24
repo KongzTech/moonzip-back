@@ -9,13 +9,13 @@ use solana_sdk::{
     commitment_config::{CommitmentConfig, CommitmentLevel},
     hash::Hash,
     instruction::Instruction,
-    signature::Keypair,
+    signature::{Keypair, Signature},
     signer::Signer,
     transaction::Transaction,
 };
 use std::{sync::Arc, time::Duration};
 use tokio::time::Instant;
-use tracing::{debug, warn};
+use tracing::{debug, info, instrument, warn};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TxExecutorConfig {
@@ -78,7 +78,13 @@ impl TxExecutor {
         let blockhash = meta.get()?.recent_blockhash;
         let tx = request.signed(blockhash);
         let signature = self.solana_pool.jito_client().submit_single_tx(&tx).await?;
+        self.wait_by_signature(&signature).await?;
 
+        Ok(Ok(()))
+    }
+
+    #[instrument(skip(self))]
+    async fn wait_by_signature(&self, signature: &Signature) -> anyhow::Result<()> {
         let wait_commitment = CommitmentConfig::confirmed();
 
         let max_wait = Duration::from_millis(1500);
@@ -91,7 +97,7 @@ impl TxExecutor {
                 .rpc_client()
                 .use_single()
                 .await
-                .get_signature_status_with_commitment(&signature, wait_commitment)
+                .get_signature_status_with_commitment(signature, wait_commitment)
                 .await?;
             let Some(result) = result else {
                 debug!("transaction signature not found: validator ignored");
@@ -101,9 +107,12 @@ impl TxExecutor {
             if let Err(err) = result {
                 return Err(anyhow::anyhow!("transaction returned error: {err:?}"));
             }
+
+            info!("transaction confirmed successfully");
+            return Ok(());
         }
 
-        Ok(Ok(()))
+        bail!("timeout elapsed: {max_wait:?}")
     }
 
     pub async fn execute_batch(&self, requests: Vec<TransactionRequest>) -> anyhow::Result<()> {
@@ -142,6 +151,13 @@ impl TxExecutor {
             .collect::<Vec<_>>();
 
         let bundle_id = self.solana_pool.jito_client().submit_bundle(txs).await?;
+        self.watch_by_bundle_id(bundle_id).await?;
+
+        Ok(Ok(()))
+    }
+
+    #[instrument(skip(self))]
+    async fn watch_by_bundle_id(&self, bundle_id: String) -> anyhow::Result<()> {
         let wait_commitment = CommitmentLevel::Confirmed;
         let confirm_timeout = Duration::from_secs(2);
 
@@ -154,15 +170,15 @@ impl TxExecutor {
                 .get_bundle_status(&bundle_id)
                 .await?;
             if status.confirmation_status == wait_commitment {
-                break;
+                info!("bundle completed successfully");
+                return Ok(());
             }
             if let Err(err) = status.err {
-                warn!("transaction batch resulted in error: {err:?}");
+                bail!("transaction batch resulted in error: {err:?}");
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-
-        Ok(Ok(()))
+        bail!("bundle await timeout")
     }
 }
 

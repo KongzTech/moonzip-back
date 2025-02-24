@@ -75,5 +75,5 @@ pub async fn main() -> anyhow::Result<()> {
     let api_state = AppState::new(app, cfg.api);
     info!("Starting API server");
     serve::<_, backend::api::ApiDoc>(api_state, router()).await?;
-    Ok(())
+    anyhow::bail!("API server unexpectedly terminated")
 }

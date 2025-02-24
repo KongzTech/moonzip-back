@@ -15,6 +15,10 @@ pub fn project_id(id: &Uuid) -> moonzip::project::ProjectId {
     moonzip::project::ProjectId::from(id.to_u128_le())
 }
 
+pub fn from_chain_project_id(id: moonzip::project::ProjectId) -> ProjectId {
+    Uuid::from_u128_le(id.0)
+}
+
 pub type ProjectId = Uuid;
 
 #[derive(Debug, sqlx::FromRow, Clone)]
@@ -31,14 +35,7 @@ pub struct StoredProject {
 
 impl StoredProject {
     pub fn apply_from_chain(&mut self, project: moonzip::project::Project) -> bool {
-        let stage = match project.stage {
-            ProjectStage::Created => Stage::Confirmed,
-            ProjectStage::StaticPoolActive => Stage::OnStaticPool,
-            ProjectStage::StaticPoolClosed => Stage::StaticPoolClosed,
-            ProjectStage::CurvePoolActive => Stage::OnCurvePool,
-            ProjectStage::CurvePoolClosed => Stage::CurvePoolClosed,
-            ProjectStage::Graduated => Stage::Graduated,
-        };
+        let stage = Stage::from_chain(project.stage);
         let changed = self.stage != stage;
         self.stage = stage;
         changed
@@ -55,10 +52,7 @@ impl StoredProject {
     }
 }
 
-#[derive(
-    Debug, Serialize, Deserialize, sqlx::Type, Clone, Copy, PartialEq, Eq, PartialOrd, Ord,
-)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, sqlx::Type, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[sqlx(type_name = "project_stage")]
 pub enum Stage {
     Created,
@@ -68,6 +62,19 @@ pub enum Stage {
     OnCurvePool,
     CurvePoolClosed,
     Graduated,
+}
+
+impl Stage {
+    pub fn from_chain(onchain: moonzip::project::ProjectStage) -> Self {
+        match onchain {
+            ProjectStage::Created => Stage::Confirmed,
+            ProjectStage::StaticPoolActive => Stage::OnStaticPool,
+            ProjectStage::StaticPoolClosed => Stage::StaticPoolClosed,
+            ProjectStage::CurvePoolActive => Stage::OnCurvePool,
+            ProjectStage::CurvePoolClosed => Stage::CurvePoolClosed,
+            ProjectStage::Graduated => Stage::Graduated,
+        }
+    }
 }
 
 #[derive(Debug, sqlx::FromRow, Clone)]

@@ -61,6 +61,11 @@ CREATE TABLE project (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Separate table for migrations, to avoid interrupting the other project workflow.
+CREATE TABLE project_migration_lock (
+    id UUID PRIMARY KEY
+);
+
 CREATE OR REPLACE PROCEDURE assign_project_keypair(project_uuid UUID)
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -117,3 +122,9 @@ CREATE TABLE token_meta (
 -- Create index on commonly queried fields
 CREATE INDEX idx_project_owner ON project(owner);
 CREATE INDEX idx_project_created_at ON project(created_at);
+
+--- CHAIN STATES
+CREATE TABLE static_pool_chain_state (
+    project_id UUID PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
+    collected_lamports balance
+)

@@ -1,20 +1,16 @@
 use super::{
     instructions::{mzip, pumpfun, CurveCreate, InitialPurchase, InstructionsBuilder},
     storage::{
-        project::{self, project_id, CurveVariant, ImageStream, ProjectId, StoredTokenMeta},
-        DBTransaction, StorageClient, DB,
+        misc::Balance,
+        project::{self, CurveVariant, ImageStream, ProjectId, StoredTokenMeta},
+        DBTransaction, StorageClient,
     },
 };
 use crate::solana::SolanaKeys;
-use anchor_client::anchor_lang::AccountDeserialize;
-use anyhow::{bail, Context as _};
+use anyhow::bail;
 use chrono::DateTime;
 use derive_more::derive::Deref;
-use moonzip::{
-    moonzip::{static_pool_address, StaticPool},
-    project::project_address,
-    PROGRAM_AUTHORITY,
-};
+use moonzip::PROGRAM_AUTHORITY;
 use rust_decimal::prelude::Zero;
 use serde::{Deserialize, Serialize};
 use services_common::{
@@ -22,16 +18,11 @@ use services_common::{
     utils::period_fetch::{DataReceiver, PeriodicFetcher, PeriodicFetcherConfig},
     TZ,
 };
-use solana_client::rpc_config::RpcAccountInfoConfig;
-use solana_sdk::{commitment_config::CommitmentConfig, signer::Signer};
-use sqlx::{query, query_as, Executor};
-use std::{
-    ops::{Deref, DerefMut},
-    sync::Arc,
-    time::Duration,
-};
+use solana_sdk::signer::Signer;
+use sqlx::{query, query_as};
+use std::{ops::DerefMut, sync::Arc, time::Duration};
 use tokio::{spawn, task::JoinHandle};
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use txs::{TransactionRequest, TxExecutor, TxExecutorConfig};
 
 const DEV_WEBSITE: &str = "https://moon.zip";
@@ -80,7 +71,6 @@ impl Migrator {
 
         let tools = Tools {
             internal: Arc::new(ToolsInternal {
-                solana_pool: solana_pool.clone(),
                 storage: storage.clone(),
                 pumpfun_meta_rx: instructions_builder.pump_meta.clone(),
                 moonzip_meta_rx: instructions_builder.mzip_meta.clone(),
@@ -103,6 +93,8 @@ impl Migrator {
             loop {
                 if let Err(err) = migrator.tick().await {
                     error!("migration tick failed: {err:#}");
+                } else {
+                    debug!("migrator tick completed successfully");
                 }
 
                 tokio::time::sleep(config.tick_interval).await;
@@ -121,78 +113,46 @@ impl Migrator {
     }
 
     async fn tick_page<'a>(&self, after: DateTime<TZ>) -> anyhow::Result<Option<DateTime<TZ>>> {
-        let projects = query_as!(
-            project::StoredProject,
+        let eligible_stages = [
+            project::Stage::Confirmed,
+            project::Stage::OnStaticPool,
+            project::Stage::StaticPoolClosed,
+            project::Stage::CurvePoolClosed,
+        ];
+        let projects:Vec<FullProjectState> = query_as(
             r#"SELECT
-                id,
-                owner,
-                deploy_schema AS "deploy_schema: _",
-                stage AS "stage: _",
-                static_pool_pubkey AS "static_pool_pubkey?: _",
-                curve_pool_keypair AS "curve_pool_keypair?: _",
-                dev_lock_keypair AS "dev_lock_keypair?: _",
-                created_at
-            FROM project WHERE stage != $1 AND created_at > $2 ORDER BY created_at ASC LIMIT $3"#,
-            project::Stage::Graduated as _,
-            after as _,
-            Self::PAGE_SIZE as i64
-        )
+                project.id AS id,
+                project.owner AS owner,
+                project.deploy_schema AS deploy_schema,
+                project.stage AS stage,
+                project.static_pool_pubkey AS static_pool_pubkey,
+                project.curve_pool_keypair AS curve_pool_keypair,
+                project.dev_lock_keypair AS dev_lock_keypair,
+                project.created_at AS created_at,
+                static_pool_chain_state.collected_lamports AS static_pool_collected_lamports
+            FROM project LEFT JOIN static_pool_chain_state ON project.id = static_pool_chain_state.project_id
+            WHERE stage = ANY($1::project_stage[]) AND created_at > $2 ORDER BY created_at ASC LIMIT $3
+            "#,
+        ).bind(eligible_stages).bind(after).bind(Self::PAGE_SIZE as i64)
         .fetch_all(&*self.tools.storage)
         .await?;
+        debug!(
+            "received projects for migration: {:?}",
+            projects
+                .iter()
+                .map(|project| project.project.id)
+                .collect::<Vec<_>>()
+        );
         let received_projects = projects.len();
-        let last_timemark = projects.last().map(|project| project.created_at);
+        let last_timemark = projects.last().map(|project| project.project.created_at);
 
-        let project_keys = projects
-            .iter()
-            .map(|project| project_address(&project_id(&project.id)))
-            .collect::<Vec<_>>();
-
-        let client = self.tools.solana_pool.rpc_client();
-        let accounts = client
-            .use_single()
-            .await
-            .get_multiple_accounts_with_config(
-                &project_keys,
-                RpcAccountInfoConfig {
-                    commitment: Some(CommitmentConfig::confirmed()),
-                    ..Default::default()
-                },
-            )
-            .await?;
-        let iter = projects
-            .into_iter()
-            .zip(accounts.value.into_iter())
-            .filter_map(|(project, account)| {
-                let account = account?;
-                Some((project, account))
-            });
-        for (mut project, account) in iter {
-            let previous_stage = project.stage;
-            let project_data = moonzip::project::Project::try_deserialize(&mut &account.data[..])?;
-            let has_changed = project.apply_from_chain(project_data);
-            if has_changed {
-                set_project_stage(self.tools.storage.deref(), project.id, project.stage).await?;
-                tracing::debug!(
-                    "synced project({}) stage {:?} -> {:?}",
-                    project.id,
-                    previous_stage,
-                    project.stage
-                )
-            }
-            if !migrator_target(&project) {
-                debug!(
-                    "skipping project({:?}) migration - not a target",
-                    project.id
-                );
-                continue;
-            }
-
+        for project in projects.into_iter() {
             let executor = ProjectMigrationExecutor {
                 tools: self.tools.clone(),
-                project,
+                project_state: project,
             };
             spawn(async move {
-                let id = executor.project.id;
+                let id = executor.project_state.project.id;
                 if let Err(err) = executor.migrate().await {
                     warn!("failed to execute migration for project({:?}): {err:#}", id);
                 }
@@ -207,53 +167,75 @@ impl Migrator {
     }
 }
 
-fn migrator_target(project: &project::StoredProject) -> bool {
-    matches!(
-        project.stage,
-        project::Stage::Confirmed
-            | project::Stage::OnStaticPool
-            | project::Stage::StaticPoolClosed
-            | project::Stage::CurvePoolClosed
-    )
+#[derive(sqlx::FromRow, Clone)]
+struct FullProjectState {
+    #[sqlx(flatten)]
+    project: project::StoredProject,
+    static_pool_collected_lamports: Option<Balance>,
+}
+
+impl FullProjectState {
+    fn should_close_static_pool(&self) -> bool {
+        let pool_schema = self
+            .project
+            .deploy_schema
+            .static_pool
+            .as_ref()
+            .expect("no static pool in project deploy schema");
+
+        let current_ts = TZ::now().timestamp();
+
+        let mut is_closed = false;
+        is_closed = is_closed || (current_ts >= pool_schema.launch_ts);
+        is_closed
+    }
 }
 
 struct ProjectMigrationExecutor {
     tools: Tools,
-    project: project::StoredProject,
+    project_state: FullProjectState,
 }
 
 impl ProjectMigrationExecutor {
-    #[instrument(skip(self), fields(project_id = %self.project.id))]
+    #[instrument(skip(self), fields(project_id = %self.project_state.project.id))]
     async fn migrate(self) -> anyhow::Result<()> {
-        match self.project.stage {
+        match self.project_state.project.stage {
             // project is created with graduation straight to curve pool
             project::Stage::Confirmed => {
-                if self.project.deploy_schema.static_pool.is_some() {
+                if self
+                    .project_state
+                    .project
+                    .deploy_schema
+                    .static_pool
+                    .is_some()
+                {
                     bail!("invariant: project must have begun straight to static pool");
                 }
-                self.deploy_curve(ChainHelper::new(&self.tools.solana_pool, &self.project))
-                    .await?;
+                info!("would deploy curve, avoiding static pool");
+                self.deploy_curve().await?;
             }
             // we need to migrate static pool to curve pool
             project::Stage::StaticPoolClosed => {
-                self.deploy_curve(ChainHelper::new(&self.tools.solana_pool, &self.project))
-                    .await?;
+                info!("would deploy curve, static pool is already closed");
+                self.deploy_curve().await?;
             }
             project::Stage::OnStaticPool => {
-                let mut chain_helper = ChainHelper::new(&self.tools.solana_pool, &self.project);
-                if chain_helper.should_close_static_pool().await? {
-                    self.deploy_curve(chain_helper).await?;
+                if self.project_state.should_close_static_pool() {
+                    info!("would deploy curve, static pool should be closed by time");
+                    self.deploy_curve().await?;
                 }
             }
             project::Stage::CurvePoolClosed => {
+                info!("curve pool closed, need to deploy on raydium");
                 let mut lock = self
                     .tools
-                    .lock_project_with_stage(&self.project.id, |stage| {
-                        stage == project::Stage::CurvePoolClosed
-                    })
+                    .lock_project(&self.project_state.project.id)
                     .await?;
-                let chain_helper = ChainHelper::new(&self.tools.solana_pool, &self.project);
-                let deployer = Deployer::new(self.tools.clone(), &mut lock, chain_helper);
+                let deployer = Deployer {
+                    tools: self.tools.clone(),
+                    lock: &mut lock,
+                    project_state: &self.project_state,
+                };
                 deployer.graduate_to_raydium().await?;
             }
             _ => {
@@ -263,32 +245,31 @@ impl ProjectMigrationExecutor {
         Ok(())
     }
 
-    async fn deploy_curve<'a>(&self, chain_helper: ChainHelper<'a>) -> anyhow::Result<()> {
-        let verify_stage = |stage: project::Stage| {
-            stage == project::Stage::StaticPoolClosed
-                || stage == project::Stage::Confirmed
-                || stage == project::Stage::OnStaticPool
-        };
-
+    async fn deploy_curve<'a>(&self) -> anyhow::Result<()> {
         let mut lock = self
             .tools
-            .lock_project_with_stage(&self.project.id, verify_stage)
+            .lock_project(&self.project_state.project.id)
             .await?;
 
         // Assign keypair and deploy project metadata if needed
-        if lock.project.curve_pool_mint().is_none() {
+        if self.project_state.project.curve_pool_mint().is_none() {
             let prepare_curve_deploy = PrepareCurveDeploy {
                 tools: self.tools.clone(),
+                project_state: &self.project_state,
                 lock,
             };
             prepare_curve_deploy.prepare().await?;
             lock = self
                 .tools
-                .lock_project_with_stage(&self.project.id, verify_stage)
+                .lock_project(&self.project_state.project.id)
                 .await?;
         }
 
-        let mut deployer = Deployer::new(self.tools.clone(), &mut lock, chain_helper);
+        let mut deployer = Deployer {
+            tools: self.tools.clone(),
+            lock: &mut lock,
+            project_state: &self.project_state,
+        };
         deployer.init_curve_pool().await?;
         Ok(())
     }
@@ -297,21 +278,13 @@ impl ProjectMigrationExecutor {
 struct Deployer<'a, 'b> {
     tools: Tools,
     lock: &'a mut ProjectLock<'b>,
-    chain_helper: ChainHelper<'a>,
+    project_state: &'a FullProjectState,
 }
 
 impl<'a, 'b> Deployer<'a, 'b> {
-    fn new(tools: Tools, lock: &'a mut ProjectLock<'b>, chain_helper: ChainHelper<'a>) -> Self {
-        Self {
-            tools,
-            lock,
-            chain_helper,
-        }
-    }
-
     async fn init_curve_pool(&mut self) -> anyhow::Result<()> {
         let dev_purchase = self
-            .lock
+            .project_state
             .project
             .deploy_schema
             .dev_purchase
@@ -320,8 +293,19 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .map(|purchase| purchase.amount.try_into())
             .transpose()?;
 
-        let post_dev_purchase = if self.lock.project.deploy_schema.static_pool.is_some() {
-            let collected = self.chain_helper.static_pool().await?.collected_lamports;
+        let post_dev_purchase = if self
+            .project_state
+            .project
+            .deploy_schema
+            .static_pool
+            .is_some()
+        {
+            let collected: u64 = self
+                .project_state
+                .static_pool_collected_lamports
+                .clone()
+                .unwrap_or_default()
+                .try_into()?;
             if collected == 0 {
                 None
             } else {
@@ -334,15 +318,21 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let mut ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.lock.project)?;
+            .for_project(&self.project_state.project)?;
         let mut first_tx = ix_builder.lock_project()?;
 
-        if self.lock.project.deploy_schema.static_pool.is_some() {
+        if self
+            .project_state
+            .project
+            .deploy_schema
+            .static_pool
+            .is_some()
+        {
             first_tx.append(&mut ix_builder.graduate_static_pool()?);
         }
 
         let curve_mint_keypair = self
-            .lock
+            .project_state
             .project
             .curve_pool_keypair
             .as_ref()
@@ -351,13 +341,13 @@ impl<'a, 'b> Deployer<'a, 'b> {
                 anyhow::anyhow!("invariant: curve pool secret key is not already stored")
             })?;
         let dev_lock_keypair = self
-            .lock
+            .project_state
             .project
             .dev_lock_keypair
             .as_ref()
             .map(|keypair| keypair.to_keypair());
         let should_lock = self
-            .lock
+            .project_state
             .project
             .deploy_schema
             .dev_purchase
@@ -365,7 +355,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .map(|purchase| !purchase.lock_period.is_zero())
             .unwrap_or(false);
 
-        let token_meta = token_meta(&mut self.lock.tx, self.lock.project.id).await?;
+        let token_meta = token_meta(&mut self.lock.tx, self.project_state.project.id).await?;
         let curve_create = CurveCreate {
             mint: curve_mint_keypair.pubkey(),
             dev_purchase: dev_purchase.map(|sols| InitialPurchase {
@@ -379,7 +369,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
             metadata: token_meta,
         };
 
-        match self.lock.project.deploy_schema.curve_pool {
+        match self.project_state.project.deploy_schema.curve_pool {
             CurveVariant::Moonzip => {
                 first_tx.append(&mut ix_builder.init_moonzip_pool(curve_create)?);
             }
@@ -443,7 +433,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.lock.project)?;
+            .for_project(&self.project_state.project)?;
         let mut first_tx = ix_builder.graduate_curve_pool()?;
         let (openbook_market, mut openbook_market_ix) = ix_builder.prepare_openbook_market()?;
         first_tx.append(&mut openbook_market_ix);
@@ -490,71 +480,21 @@ impl<'a, 'b> Deployer<'a, 'b> {
     }
 }
 
-struct ChainHelper<'a> {
-    pool: &'a SolanaPool,
-    fetched_static_pool: Option<StaticPool>,
-    project: &'a project::StoredProject,
-}
-
-impl<'a> ChainHelper<'a> {
-    fn new(pool: &'a SolanaPool, project: &'a project::StoredProject) -> Self {
-        Self {
-            pool,
-            fetched_static_pool: None,
-            project,
-        }
-    }
-
-    async fn should_close_static_pool(&mut self) -> anyhow::Result<bool> {
-        let pool = self.static_pool().await?;
-
-        Ok(pool
-            .config
-            .close_conditions
-            .should_be_closed(pool.collected_lamports, TZ::now().timestamp() as u64))
-    }
-
-    async fn static_pool(&mut self) -> anyhow::Result<&StaticPool> {
-        {
-            if let Some(pool) = self.fetched_static_pool.take() {
-                self.fetched_static_pool = Some(pool);
-                return Ok(self.fetched_static_pool.as_ref().unwrap());
-            }
-        }
-        let mint = self
-            .project
-            .static_pool_mint()
-            .ok_or_else(|| anyhow::anyhow!("invariant: static pool mint is not already stored"))?;
-
-        let address = static_pool_address(mint);
-        let pool = self
-            .pool
-            .rpc_client()
-            .use_single()
-            .await
-            .get_account_data(&address)
-            .await
-            .context("fetch static pool")?;
-        let pool = StaticPool::try_deserialize(&mut &pool[..])?;
-        self.fetched_static_pool = Some(pool);
-        Ok(self.fetched_static_pool.as_ref().unwrap())
-    }
-}
-
 struct PrepareCurveDeploy<'a> {
     tools: Tools,
     lock: ProjectLock<'a>,
+    project_state: &'a FullProjectState,
 }
 
 impl<'a> PrepareCurveDeploy<'a> {
     async fn prepare(mut self) -> anyhow::Result<()> {
         query!(
             r#"call assign_project_keypair($1)"#,
-            self.lock.project.id as _,
+            self.project_state.project.id as _,
         )
         .execute(&mut *self.lock.tx)
         .await?;
-        self.deploy_metadata(self.lock.project.deploy_schema.curve_pool)
+        self.deploy_metadata(self.project_state.project.deploy_schema.curve_pool)
             .await?;
         self.lock.commit().await?;
 
@@ -562,13 +502,13 @@ impl<'a> PrepareCurveDeploy<'a> {
     }
 
     async fn deploy_metadata(&mut self, curve_variant: CurveVariant) -> anyhow::Result<String> {
-        let meta = token_meta(&mut self.lock.tx, self.lock.project.id).await?;
+        let meta = token_meta(&mut self.lock.tx, self.project_state.project.id).await?;
         if let Some(deployed_url) = meta.deployed_url {
             return Ok(deployed_url);
         }
 
         let metadata_uri = {
-            let image = token_image(&mut self.lock.tx, self.lock.project.id).await?;
+            let image = token_image(&mut self.lock.tx, self.project_state.project.id).await?;
 
             match curve_variant {
                 CurveVariant::Moonzip => {
@@ -583,7 +523,7 @@ impl<'a> PrepareCurveDeploy<'a> {
         sqlx::query!(
             "UPDATE token_meta SET deployed_url = $1 WHERE project_id = $2",
             metadata_uri,
-            self.lock.project.id as _,
+            self.project_state.project.id as _,
         )
         .execute(self.lock.tx.deref_mut())
         .await?;
@@ -642,7 +582,6 @@ struct Tools {
 }
 
 struct ToolsInternal {
-    solana_pool: SolanaPool,
     solana_keys: SolanaKeys,
 
     storage: StorageClient,
@@ -660,60 +599,19 @@ impl Tools {
     async fn lock_project<'a>(&self, project_id: &ProjectId) -> anyhow::Result<ProjectLock<'_>> {
         let mut tx = self.storage.serializable_tx().await?;
 
-        let project = query_as!(
-            project::StoredProject,
-            r#"SELECT
-                id,
-                owner,
-                deploy_schema AS "deploy_schema: _",
-                stage AS "stage: _",
-                static_pool_pubkey AS "static_pool_pubkey?: _",
-                curve_pool_keypair AS "curve_pool_keypair?: _",
-                dev_lock_keypair AS "dev_lock_keypair?: _",
-                created_at
-            FROM project WHERE id = $1 FOR UPDATE NOWAIT"#,
-            project_id as _,
+        sqlx::query!(
+            "SELECT id FROM project_migration_lock WHERE id = $1 FOR UPDATE NOWAIT;",
+            project_id
         )
-        .fetch_one(&mut *tx)
+        .fetch_one(tx.deref_mut())
         .await?;
 
-        Ok(ProjectLock { tx, project })
-    }
-
-    async fn lock_project_with_stage<'a>(
-        &'a self,
-        project_id: &ProjectId,
-        verify_stage: impl Fn(project::Stage) -> bool,
-    ) -> anyhow::Result<ProjectLock<'a>> {
-        let lock = self.lock_project(project_id).await?;
-        if !verify_stage(lock.project.stage) {
-            bail!(
-                "project stage mismatch(actual {:?}): updated by different process",
-                lock.project.stage
-            );
-        }
-        Ok(lock)
+        Ok(ProjectLock { tx })
     }
 }
 
 struct ProjectLock<'a> {
     tx: DBTransaction<'a>,
-    project: project::StoredProject,
-}
-
-async fn set_project_stage<'a, 'c, E: Executor<'c, Database = DB> + 'a>(
-    executor: E,
-    project_id: ProjectId,
-    stage: project::Stage,
-) -> anyhow::Result<()> {
-    query!(
-        r#"UPDATE project SET stage = $1 WHERE id = $2"#,
-        stage as _,
-        project_id as _,
-    )
-    .execute(executor)
-    .await?;
-    Ok(())
 }
 
 impl<'a> ProjectLock<'a> {

@@ -54,6 +54,7 @@ dev-db:
   	postgres:16
 	echo "DATABASE_URL=postgres://app-adm:app-adm-pass@localhost:15432/app-db?sslmode=disable" > .env
 	echo "SQLX_OFFLINE=true" >> .env
+	sleep 2
 	sqlx migrate run --source backend/db/migrations
 
 .PHONY: pre-commit

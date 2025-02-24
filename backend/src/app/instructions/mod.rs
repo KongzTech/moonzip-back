@@ -25,7 +25,7 @@ use moonzip::{
 };
 use mpl::SampleMetadata;
 use mpl_token_metadata::instructions::CreateV1Builder;
-use mzip::FEE_ACCOUNT;
+use mzip::{FEE_ACCOUNT, MOONZIP_EVENT_AUTHORITY};
 use openbook::OpenbookInstructionsBuilder;
 use serde::Deserialize;
 use serde_with::{serde_as, DurationSeconds};
@@ -223,9 +223,11 @@ impl<'a> ProjectsOperations<'a> {
             .request()
             .accounts(moonzip::accounts::CreateProjectAccounts {
                 authority: moonzip::PROGRAM_AUTHORITY,
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
                 creator: self.project.owner.clone().into(),
                 project: project_address,
                 system_program: solana_sdk::system_program::ID,
+                program: moonzip::ID,
             })
             .args(moonzip::instruction::CreateProject {
                 data: CreateProjectData {
@@ -266,11 +268,13 @@ impl<'a> ProjectsOperations<'a> {
             .request()
             .accounts(moonzip::accounts::CreateStaticPoolAccounts {
                 authority: moonzip::PROGRAM_AUTHORITY,
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
                 project: project_address,
                 mint: static_pool_mint.pubkey(),
                 pool_mint_account,
                 pool: pool_address,
 
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
                 token_program: anchor_spl::token::ID,
@@ -300,10 +304,12 @@ impl<'a> ProjectsOperations<'a> {
             .request()
             .accounts(moonzip::accounts::GraduateStaticPoolAccounts {
                 authority: moonzip::PROGRAM_AUTHORITY,
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
                 funds_receiver: moonzip::PROGRAM_AUTHORITY,
                 project: project_address(&project_id(&self.project.id)),
                 pool: self.static_pool_address()?,
 
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
                 token_program: anchor_spl::token::ID,
@@ -492,8 +498,10 @@ impl<'a> ProjectsOperations<'a> {
         let ix = program
             .request()
             .accounts(moonzip::accounts::GraduateProjectAccounts {
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
                 authority: moonzip::PROGRAM_AUTHORITY,
                 project,
+                program: moonzip::ID,
             })
             .args(moonzip::instruction::ProjectGraduate {
                 _data: moonzip::project::GraduateProjectData {
@@ -528,6 +536,8 @@ impl<'a> ProjectsOperations<'a> {
                         user_token_account: get_associated_token_address(&user, &action.mint),
                         user,
 
+                        event_authority: *MOONZIP_EVENT_AUTHORITY,
+                        program: moonzip::ID,
                         system_program: solana_sdk::system_program::ID,
                         token_program: anchor_spl::token::ID,
                         associated_token_program: anchor_spl::associated_token::ID,
@@ -554,6 +564,8 @@ impl<'a> ProjectsOperations<'a> {
                 pool_token_account,
                 pool: pool_address,
 
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 token_program: anchor_spl::token::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
@@ -607,12 +619,15 @@ impl<'a> ProjectsOperations<'a> {
         let ix = program
             .request()
             .accounts(moonzip::accounts::GraduateCurvedPoolAccounts {
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
+
                 authority: moonzip::PROGRAM_AUTHORITY,
                 project: project_address(&project_id),
                 fee: fee_address(),
                 funds_receiver: moonzip::PROGRAM_AUTHORITY,
                 pool: pool_address,
 
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
                 token_program: anchor_spl::token::ID,
@@ -958,6 +973,7 @@ impl<'a> ProjectsOperations<'a> {
             .request()
             .accounts(moonzip::accounts::BuyFromStaticPoolAccounts {
                 authority: moonzip::PROGRAM_AUTHORITY,
+
                 fee: *FEE_ACCOUNT,
                 project: project_address,
                 user,
@@ -965,6 +981,9 @@ impl<'a> ProjectsOperations<'a> {
                 user_mint_account: get_associated_token_address(&user, &static_pool_mint),
                 pool_mint_account: get_associated_token_address(&pool, &static_pool_mint),
                 pool,
+
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 token_program: anchor_spl::token::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
@@ -998,6 +1017,7 @@ impl<'a> ProjectsOperations<'a> {
         Ok(program
             .request()
             .accounts(moonzip::accounts::BuyFromCurvedPoolAccounts {
+                event_authority: *MOONZIP_EVENT_AUTHORITY,
                 authority: moonzip::PROGRAM_AUTHORITY,
                 project: project_address,
                 fee: fee_address(),
@@ -1006,6 +1026,8 @@ impl<'a> ProjectsOperations<'a> {
                 user_token_account: get_associated_token_address(&user, &curve_mint),
                 pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
                 pool: curve_pool,
+
+                program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
                 token_program: anchor_spl::token::ID,
                 associated_token_program: anchor_spl::associated_token::ID,
@@ -1052,6 +1074,7 @@ impl<'a> ProjectsOperations<'a> {
                     .request()
                     .accounts(moonzip::accounts::SellToStaticPoolAccounts {
                         authority: moonzip::PROGRAM_AUTHORITY,
+
                         fee: *FEE_ACCOUNT,
                         project: project_address,
                         user,
@@ -1059,6 +1082,9 @@ impl<'a> ProjectsOperations<'a> {
                         user_token_account: get_associated_token_address(&user, &static_pool_mint),
                         pool_token_account: get_associated_token_address(&pool, &static_pool_mint),
                         pool,
+
+                        event_authority: *MOONZIP_EVENT_AUTHORITY,
+                        program: moonzip::ID,
                         system_program: solana_sdk::system_program::ID,
                         token_program: anchor_spl::token::ID,
                         associated_token_program: anchor_spl::associated_token::ID,
@@ -1081,6 +1107,7 @@ impl<'a> ProjectsOperations<'a> {
                     .request()
                     .accounts(moonzip::accounts::SellFromCurvedPoolAccounts {
                         authority: moonzip::PROGRAM_AUTHORITY,
+
                         fee: fee_address(),
                         project: project_address,
                         user,
@@ -1088,6 +1115,9 @@ impl<'a> ProjectsOperations<'a> {
                         user_token_account: get_associated_token_address(&user, &curve_mint),
                         pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
                         pool: curve_pool,
+
+                        event_authority: *MOONZIP_EVENT_AUTHORITY,
+                        program: moonzip::ID,
                         system_program: solana_sdk::system_program::ID,
                         token_program: anchor_spl::token::ID,
                         associated_token_program: anchor_spl::associated_token::ID,

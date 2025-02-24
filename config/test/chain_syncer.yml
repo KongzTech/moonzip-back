@@ -1,0 +1,2 @@
+geyser:
+  endpoint: "http://solana-test-validator:10000"

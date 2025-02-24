@@ -37,8 +37,13 @@ impl StorageClient {
         Ok(Self::new(pool))
     }
 
+    pub async fn tx(&self) -> anyhow::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let tx = self.pool.begin().await?;
+        Ok(tx)
+    }
+
     pub async fn serializable_tx(&self) -> anyhow::Result<sqlx::Transaction<'_, sqlx::Postgres>> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.tx().await?;
         query!("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .execute(&mut *tx)
             .await?;

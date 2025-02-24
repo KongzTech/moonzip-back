@@ -2,6 +2,7 @@ use derive_more::derive::{From, Into};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, signature::Keypair};
+
 #[derive(
     Debug, Serialize, Deserialize, sqlx::Type, From, Into, Clone, PartialEq, Eq, PartialOrd, Ord,
 )]
@@ -59,6 +60,12 @@ impl From<StoredKeypair> for Keypair {
 )]
 #[sqlx(type_name = "balance")]
 pub struct Balance(Decimal);
+
+impl Default for Balance {
+    fn default() -> Self {
+        Self(Decimal::ZERO)
+    }
+}
 
 impl From<u64> for Balance {
     fn from(value: u64) -> Self {

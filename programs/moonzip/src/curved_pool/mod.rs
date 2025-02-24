@@ -1,5 +1,6 @@
 use crate::{
     ensure_account_size,
+    events::{CurvedPoolBuyEvent, CurvedPoolSellEvent},
     fee::{take_fee, FeeAccount, FEE_ACCOUNT_PREFIX},
     utils::Sizable,
     Project, ProjectId, ProjectStage, PROGRAM_AUTHORITY, PROJECT_PREFIX,
@@ -47,7 +48,10 @@ pub fn create(ctx: Context<CreateCurvedPoolAccounts>, data: CreateCurvedPoolData
         bump: ctx.bumps.pool,
     });
 
-    ctx.accounts.project.stage = ProjectStage::CurvePoolActive;
+    emit_cpi!(ctx
+        .accounts
+        .project
+        .set_stage(ProjectStage::CurvePoolActive)?);
 
     Ok(())
 }
@@ -56,7 +60,6 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
     if !ctx.accounts.pool.close_if_needed() {
         return err!(CurvedPoolError::NotClosed);
     }
-    ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
 
     let pool = ctx
         .accounts
@@ -67,8 +70,10 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
         .add_lamports(ctx.accounts.pool.curve.sol_balance())?;
     pool.close(ctx.accounts.authority.to_account_info())?;
 
+    // Ok to avoid storing event there - it is needed for check only.
+    ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
     ctx.accounts.project.ensure_can_graduate()?;
-    ctx.accounts.project.stage = ProjectStage::Graduated;
+    emit_cpi!(ctx.accounts.project.set_stage(ProjectStage::Graduated)?);
 
     Ok(())
 }
@@ -91,9 +96,22 @@ pub fn buy(ctx: Context<BuyFromCurvedPoolAccounts>, data: BuyFromCurvedPoolData)
     }
 
     ctx.accounts.pool.curve.commit_buy(after_fee, tokens);
+    let event = CurvedPoolBuyEvent {
+        project_id: ctx.accounts.project.id,
+        user: ctx.accounts.user.key(),
+        request_sols: data.sols,
+        min_token_output: data.min_token_output,
+        tokens_output: tokens,
+        new_virtual_token_reserves: ctx.accounts.pool.curve.virtual_token_reserves,
+        new_virtual_sol_reserves: ctx.accounts.pool.curve.virtual_sol_reserves,
+    };
+    emit_cpi!(event);
 
     if ctx.accounts.pool.close_if_needed() {
-        ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
+        emit_cpi!(ctx
+            .accounts
+            .project
+            .set_stage(ProjectStage::CurvePoolClosed)?);
     }
 
     let bump = &[ctx.accounts.pool.bump][..];
@@ -137,18 +155,20 @@ pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolDa
         return err!(CurvedPoolError::AlreadyClosed);
     }
 
-    let sols = SellCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
-    if sols < data.min_sol_output {
+    let request_sols = SellCalculator::new(&ctx.accounts.pool.curve).fixed_tokens(data.tokens);
+    let fee = ctx.accounts.fee.config.on_sell.part_of(request_sols);
+    let after_fee = request_sols.saturating_sub(fee);
+
+    if after_fee < data.min_sol_output {
         return err!(CurvedPoolError::SlippageFailure);
     }
-    if !ctx.accounts.pool.sell_allowed(data.tokens, sols) {
+    if !ctx.accounts.pool.sell_allowed(data.tokens, request_sols) {
         return err!(CurvedPoolError::OperationDisallowed);
     }
-    ctx.accounts.pool.curve.commit_sell(data.tokens, sols);
-
-    if ctx.accounts.pool.close_if_needed() {
-        ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
-    }
+    ctx.accounts
+        .pool
+        .curve
+        .commit_sell(data.tokens, request_sols);
 
     anchor_spl::token::transfer(
         CpiContext::new(
@@ -162,10 +182,22 @@ pub fn sell(ctx: Context<SellFromCurvedPoolAccounts>, data: SellFromCurvedPoolDa
         data.tokens,
     )?;
 
-    let fee = ctx.accounts.fee.config.on_sell.part_of(sols);
-    ctx.accounts.pool.sub_lamports(sols)?;
-    ctx.accounts.user.add_lamports(sols - fee)?;
+    ctx.accounts.pool.sub_lamports(request_sols)?;
+    ctx.accounts.user.add_lamports(after_fee)?;
     ctx.accounts.fee.add_lamports(fee)?;
+
+    let event = CurvedPoolSellEvent {
+        project_id: ctx.accounts.project.id,
+        user: ctx.accounts.user.key(),
+
+        request_tokens: data.tokens,
+        min_sol_output: data.min_sol_output,
+        sols_output: after_fee,
+
+        new_virtual_token_reserves: ctx.accounts.pool.curve.virtual_token_reserves,
+        new_virtual_sol_reserves: ctx.accounts.pool.curve.virtual_sol_reserves,
+    };
+    emit_cpi!(event);
 
     Ok(())
 }
@@ -280,6 +312,7 @@ pub struct CreateCurvedPoolData {
     pub project_id: ProjectId,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: CreateCurvedPoolData)]
 pub struct CreateCurvedPoolAccounts<'info> {
@@ -290,12 +323,12 @@ pub struct CreateCurvedPoolAccounts<'info> {
         mut,
         seeds = [PROJECT_PREFIX, &data.project_id.to_bytes()], bump = project.bump
     )]
-    pub project: Account<'info, Project>,
+    pub project: Box<Account<'info, Project>>,
 
     #[account(
         seeds = [GLOBAL_ACCOUNT_PREFIX], bump=global.bump
     )]
-    pub global: Account<'info, GlobalCurvedPoolAccount>,
+    pub global: Box<Account<'info, GlobalCurvedPoolAccount>>,
 
     #[account(
         init,
@@ -304,7 +337,7 @@ pub struct CreateCurvedPoolAccounts<'info> {
         mint::authority = authority,
         mint::freeze_authority = authority
     )]
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
 
     #[account(
         init,
@@ -312,14 +345,14 @@ pub struct CreateCurvedPoolAccounts<'info> {
         associated_token::mint = mint,
         associated_token::authority = pool,
     )]
-    pub pool_token_account: Account<'info, TokenAccount>,
+    pub pool_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init,
         payer = authority,
         space = CurvedPool::ACCOUNT_SIZE, seeds = [CURVED_POOL_PREFIX, mint.key().as_ref()], bump
     )]
-    pub pool: Account<'info, CurvedPool>,
+    pub pool: Box<Account<'info, CurvedPool>>,
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
@@ -333,6 +366,7 @@ pub struct BuyFromCurvedPoolData {
     pub min_token_output: u64,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: BuyFromCurvedPoolData)]
 pub struct BuyFromCurvedPoolAccounts<'info> {
@@ -390,6 +424,7 @@ pub struct SellFromCurvedPoolData {
     pub min_sol_output: u64,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: SellFromCurvedPoolData)]
 pub struct SellFromCurvedPoolAccounts<'info> {
@@ -439,6 +474,7 @@ pub struct SellFromCurvedPoolAccounts<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(data: GraduateCurvedPoolData)]
 pub struct GraduateCurvedPoolAccounts<'info> {

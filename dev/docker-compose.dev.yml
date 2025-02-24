@@ -57,6 +57,7 @@ services:
     ports:
       - 18899:18899
       - 18900:18900
+      - 10000:10000
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 18899"]
       interval: 5s
@@ -91,6 +92,22 @@ services:
       pumpfun-mock:
         condition: service_healthy
       jito-mock:
+        condition: service_healthy
+      app-chain-syncer:
+        condition: service_started
+  app-chain-syncer:
+    image: moonzip/dev:latest
+    command: ["chain_syncer"]
+    environment:
+      DATABASE_URL: postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable
+      APP_NAME: chain_syncer
+      APP_RUN_MODE: test
+    networks:
+      - moonzip-dev
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      solana-test-validator:
         condition: service_healthy
 
   app-api:

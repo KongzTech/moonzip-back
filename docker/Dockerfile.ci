@@ -26,6 +26,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     make build && make build-program && yarn install && \
     cp ./target/debug/api_server /usr/local/bin/api_server && \
     cp ./target/debug/migrator /usr/local/bin/migrator && \
+    cp ./target/debug/chain_syncer /usr/local/bin/chain_syncer && \
     cp ./target/deploy/moonzip.so . && cp -r ./target/idl . && \
     solana-keygen new --no-passphrase
 
