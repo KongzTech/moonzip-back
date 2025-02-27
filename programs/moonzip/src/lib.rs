@@ -19,6 +19,7 @@ pub mod moonzip {
     pub use super::curved_pool::*;
     pub use super::fee::*;
     pub use super::project::*;
+    pub use super::pumpfun::*;
     pub use super::static_pool::*;
     pub use super::transmuter::*;
     use super::*;
@@ -133,5 +134,9 @@ pub mod moonzip {
 
     pub fn transmute_idempotent(ctx: Context<TransmuteIdempotentAccounts>) -> Result<()> {
         transmuter::transmute_idempotent(ctx)
+    }
+
+    pub fn buy_from_pump(ctx: Context<BuyFromPumpAccounts>, data: BuyFromPumpData) -> Result<()> {
+        pumpfun::buy(ctx, data)
     }
 }

@@ -1,14 +1,14 @@
 use super::{
     instructions::{mzip, pumpfun, CurveCreate, InitialPurchase, InstructionsBuilder},
     storage::{
-        misc::Balance,
-        project::{self, CurveVariant, ImageStream, ProjectId, StoredTokenMeta},
+        project::{self, CurveVariant, FullProjectState, ImageStream, ProjectId, StoredTokenMeta},
         DBTransaction, StorageClient,
     },
 };
 use crate::solana::SolanaKeys;
 use anyhow::bail;
 use chrono::DateTime;
+use const_format::concatcp;
 use derive_more::derive::Deref;
 use moonzip::PROGRAM_AUTHORITY;
 use rust_decimal::prelude::Zero;
@@ -120,19 +120,10 @@ impl Migrator {
             project::Stage::CurvePoolClosed,
         ];
         let projects:Vec<FullProjectState> = query_as(
-            r#"SELECT
-                project.id AS id,
-                project.owner AS owner,
-                project.deploy_schema AS deploy_schema,
-                project.stage AS stage,
-                project.static_pool_pubkey AS static_pool_pubkey,
-                project.curve_pool_keypair AS curve_pool_keypair,
-                project.dev_lock_keypair AS dev_lock_keypair,
-                project.created_at AS created_at,
-                static_pool_chain_state.collected_lamports AS static_pool_collected_lamports
-            FROM project LEFT JOIN static_pool_chain_state ON project.id = static_pool_chain_state.project_id
-            WHERE stage = ANY($1::project_stage[]) AND created_at > $2 ORDER BY created_at ASC LIMIT $3
-            "#,
+            concatcp!(
+                FullProjectState::QUERY_BODY,
+                "WHERE stage = ANY($1::project_stage[]) AND created_at > $2 ORDER BY created_at ASC LIMIT $3"
+            )
         ).bind(eligible_stages).bind(after).bind(Self::PAGE_SIZE as i64)
         .fetch_all(&*self.tools.storage)
         .await?;
@@ -164,30 +155,6 @@ impl Migrator {
         } else {
             Ok(last_timemark)
         }
-    }
-}
-
-#[derive(sqlx::FromRow, Clone)]
-struct FullProjectState {
-    #[sqlx(flatten)]
-    project: project::StoredProject,
-    static_pool_collected_lamports: Option<Balance>,
-}
-
-impl FullProjectState {
-    fn should_close_static_pool(&self) -> bool {
-        let pool_schema = self
-            .project
-            .deploy_schema
-            .static_pool
-            .as_ref()
-            .expect("no static pool in project deploy schema");
-
-        let current_ts = TZ::now().timestamp();
-
-        let mut is_closed = false;
-        is_closed = is_closed || (current_ts >= pool_schema.launch_ts);
-        is_closed
     }
 }
 
@@ -302,8 +269,9 @@ impl<'a, 'b> Deployer<'a, 'b> {
         {
             let collected: u64 = self
                 .project_state
-                .static_pool_collected_lamports
-                .clone()
+                .static_pool_state
+                .as_ref()
+                .map(|state| state.collected_lamports.clone())
                 .unwrap_or_default()
                 .try_into()?;
             if collected == 0 {
@@ -318,18 +286,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let mut ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.project_state.project)?;
-        let mut first_tx = ix_builder.lock_project()?;
-
-        if self
-            .project_state
-            .project
-            .deploy_schema
-            .static_pool
-            .is_some()
-        {
-            first_tx.append(&mut ix_builder.graduate_static_pool()?);
-        }
+            .for_project(self.project_state)?;
 
         let curve_mint_keypair = self
             .project_state
@@ -369,62 +326,77 @@ impl<'a, 'b> Deployer<'a, 'b> {
             metadata: token_meta,
         };
 
-        match self.project_state.project.deploy_schema.curve_pool {
-            CurveVariant::Moonzip => {
-                first_tx.append(&mut ix_builder.init_moonzip_pool(curve_create)?);
-            }
-            CurveVariant::Pumpfun => {
-                let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get()?;
-                first_tx.append(&mut ix_builder.init_pumpfun_pool(curve_create, pumpfun_meta)?);
-            }
-        };
-
-        // No need to lock, deliver tokens straight to the user.
-        if dev_purchase.is_some() && !should_lock {
-            first_tx.append(&mut ix_builder.deliver_dev_tokens()?);
-            first_tx.append(&mut ix_builder.init_transmuter()?);
-        }
-
-        first_tx.append(&mut ix_builder.unlock_project()?);
-        let mut txs = vec![TransactionRequest {
-            instructions: first_tx,
+        let mut first_tx = TransactionRequest {
+            instructions: vec![],
             signers: vec![
                 self.tools.solana_keys.authority_keypair().to_keypair(),
                 curve_mint_keypair,
             ],
             payer: self.tools.solana_keys.authority_keypair().to_keypair(),
-        }];
+        };
 
-        // We need to lock, it's a heavyweight so add separate tx for that.
-        if dev_purchase.is_some() && should_lock {
-            let dev_lock_keypair = dev_lock_keypair.ok_or_else(|| {
-                anyhow::anyhow!("invariant: no dev lock keypair, but need to lock")
-            })?;
+        first_tx
+            .instructions
+            .append(&mut ix_builder.lock_project()?);
 
-            let mut ixs = vec![];
-            ixs.append(&mut ix_builder.lock_project()?);
-            ixs.append(&mut ix_builder.lock_dev()?);
-            ixs.append(&mut ix_builder.init_transmuter()?);
-            ixs.append(&mut ix_builder.unlock_project()?);
-
-            txs.push(TransactionRequest {
-                instructions: ixs,
-                signers: vec![
-                    self.tools.solana_keys.authority_keypair().to_keypair(),
-                    dev_lock_keypair,
-                ],
-                payer: self.tools.solana_keys.authority_keypair().to_keypair(),
-            })
+        if self
+            .project_state
+            .project
+            .deploy_schema
+            .static_pool
+            .is_some()
+        {
+            first_tx
+                .instructions
+                .append(&mut ix_builder.graduate_static_pool()?);
         }
 
-        if txs.len() == 1 {
-            self.tools
-                .tx_executor
-                .execute_single(txs.into_iter().next().unwrap())
-                .await?;
+        match self.project_state.project.deploy_schema.curve_pool {
+            CurveVariant::Moonzip => {
+                first_tx
+                    .instructions
+                    .append(&mut ix_builder.init_moonzip_pool(curve_create)?);
+            }
+            CurveVariant::Pumpfun => {
+                let pumpfun_meta = self.tools.pumpfun_meta_rx.clone().get()?;
+                first_tx
+                    .instructions
+                    .append(&mut ix_builder.init_pumpfun_pool(curve_create, pumpfun_meta)?);
+            }
+        };
+        first_tx
+            .instructions
+            .append(&mut ix_builder.unlock_project()?);
+
+        // second transaction is for tokens delivery mainly.
+        let mut second_tx = TransactionRequest {
+            instructions: vec![],
+            signers: vec![self.tools.solana_keys.authority_keypair().to_keypair()],
+            payer: self.tools.solana_keys.authority_keypair().to_keypair(),
+        };
+        second_tx
+            .instructions
+            .append(&mut ix_builder.lock_project()?);
+        if should_lock {
+            second_tx.instructions.append(&mut ix_builder.lock_dev()?);
+            second_tx.signers.push(
+                dev_lock_keypair
+                    .ok_or_else(|| anyhow::anyhow!("no dev lock keypair, but need to lock"))?,
+            );
         } else {
-            self.tools.tx_executor.execute_batch(txs).await?;
+            second_tx
+                .instructions
+                .append(&mut ix_builder.deliver_dev_tokens()?);
         }
+        second_tx
+            .instructions
+            .append(&mut ix_builder.init_transmuter()?);
+        second_tx
+            .instructions
+            .append(&mut ix_builder.unlock_project()?);
+
+        let txs = vec![first_tx, second_tx];
+        self.tools.tx_executor.execute_batch(txs).await?;
 
         Ok(())
     }
@@ -433,7 +405,7 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let ix_builder = self
             .tools
             .instructions_builder
-            .for_project(&self.project_state.project)?;
+            .for_project(self.project_state)?;
         let mut first_tx = ix_builder.graduate_curve_pool()?;
         let (openbook_market, mut openbook_market_ix) = ix_builder.prepare_openbook_market()?;
         first_tx.append(&mut openbook_market_ix);

@@ -45,6 +45,12 @@ CREATE DOMAIN keypair AS BYTEA
         LENGTH(VALUE) = 64
     );
 
+CREATE OR REPLACE FUNCTION kp_to_pubkey(kp keypair) RETURNS pubkey AS $$
+        BEGIN
+                RETURN substring(kp::bytea from 33);
+        END;
+$$ LANGUAGE plpgsql;
+
 CREATE TABLE mzip_keypair (
     keypair keypair PRIMARY KEY NOT NULL
 );
@@ -139,7 +145,21 @@ create index idx_user_info_wallet_address on user_info (wallet_address);
 create index idx_user_info_username on user_info (username);
 
 --- CHAIN STATES
+CREATE TYPE static_pool_state AS (
+    collected_lamports balance
+);
+
 CREATE TABLE static_pool_chain_state (
-     project_id UUID PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
-     collected_lamports balance
-)
+    project_id UUID PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
+    state static_pool_state
+);
+
+CREATE TYPE pumpfun_curve_state AS (
+    virtual_sol_reserves balance,
+    virtual_token_reserves balance
+);
+
+CREATE TABLE pumpfun_chain_state (
+    mint pubkey PRIMARY KEY NOT NULL,
+    state pumpfun_curve_state
+);

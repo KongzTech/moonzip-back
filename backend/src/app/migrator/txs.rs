@@ -1,5 +1,5 @@
 use crate::app::instructions::solana;
-use anyhow::bail;
+use anyhow::{bail, Context as _};
 use serde::{Deserialize, Serialize};
 use services_common::{
     solana::{any_tx::AnyTx, pool::SolanaPool},
@@ -76,7 +76,7 @@ impl TxExecutor {
         request: &TransactionRequest,
     ) -> anyhow::Result<anyhow::Result<()>> {
         let blockhash = meta.get()?.recent_blockhash;
-        let tx = request.signed(blockhash);
+        let tx = request.signed(blockhash)?;
         let signature = self.solana_pool.jito_client().submit_single_tx(&tx).await?;
         self.wait_by_signature(&signature).await?;
 
@@ -147,8 +147,13 @@ impl TxExecutor {
 
         let txs = requests
             .iter()
-            .map(|r| r.signed(blockhash))
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(idx, request)| {
+                request
+                    .signed(blockhash)
+                    .with_context(|| format!("signing #{idx} transaction"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let bundle_id = self.solana_pool.jito_client().submit_bundle(txs).await?;
         self.watch_by_bundle_id(bundle_id).await?;
@@ -189,9 +194,9 @@ pub struct TransactionRequest {
 }
 
 impl TransactionRequest {
-    fn signed(&self, recent_blockhash: Hash) -> AnyTx {
+    fn signed(&self, recent_blockhash: Hash) -> anyhow::Result<AnyTx> {
         let mut tx = Transaction::new_with_payer(&self.instructions, Some(&self.payer.pubkey()));
-        tx.sign(&self.signers.iter().collect::<Vec<_>>(), recent_blockhash);
-        AnyTx::from(tx)
+        tx.try_sign(&self.signers.iter().collect::<Vec<_>>(), recent_blockhash)?;
+        Ok(AnyTx::from(tx))
     }
 }

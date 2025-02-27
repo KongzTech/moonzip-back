@@ -303,7 +303,9 @@ async function testBuySellCurvePool(
   let curvePoolMint = new PublicKey(project.curvePoolMint!);
 
   console.log("project is created, verifying creator's balance");
-  let balance = await tokenBalance(curvePoolMint, owner.publicKey);
+  let balance = await waitForOk(
+    async () => await tokenBalance(curvePoolMint, owner.publicKey)
+  );
   expect(balance).to.be.gt(100_000_000);
 
   let solsToSpend = Math.floor(LAMPORTS_PER_SOL / 3);
@@ -450,31 +452,29 @@ describe("projects operations", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   before(beforeAll);
 
-  it("[moonzip] create buy sell from static pool project", async () => {
+  it("moonzip: create buy sell from static pool project", async () => {
     await testBuySellStaticPool("moonzip");
   });
 
-  it("[pumpfun] create buy sell from static pool project", async () => {
+  it("pumpfun: create buy sell from static pool project", async () => {
     await testBuySellStaticPool("pumpfun");
   });
 
-  it("[moonzip] create and wait for static pool graduate, buy from curve pool", async () => {
+  it("moonzip: create and wait for static pool graduate, buy from curve pool", async () => {
     await testBuySellCurvePool("moonzip");
   });
 
-  // TODO: unable to buy from pumpfun yet, enable when done
-  // it("[pumpfun] create and wait for static pool graduate, buy from curve pool", async () => {
-  //   await testBuySellCurvePool("pumpfun");
-  // });
+  it("pumpfun: create and wait for static pool graduate, buy from curve pool", async () => {
+    await testBuySellCurvePool("pumpfun");
+  });
 
-  it("[moonzip] create, wait for curve pool, ensure dev lock works", async () => {
+  it("moonzip: create, wait for curve pool, ensure dev lock works", async () => {
     await testDevLockWorks("moonzip");
   });
 
-  // TODO: same
-  // it("[pumpfun] create, wait for curve pool, ensure dev lock works", async () => {
-  //   await testDevLockWorks("pumpfun");
-  // });
+  it("pumpfun: create, wait for curve pool, ensure dev lock works", async () => {
+    await testDevLockWorks("pumpfun");
+  });
 
   // TODO: finish with raydium
   // it("buy to graduate to raydium, ensure correct graduation", async () => {

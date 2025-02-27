@@ -173,7 +173,10 @@ impl Parser {
             pumpfun_cpi::ID_CONST => Some(TrackedEvent::from(PumpfunEvent::from(
                 match discriminator {
                     TRADE_EVENT_DISCRIMINATOR => pumpfun_cpi::TradeEvent::deserialize(&mut data)?,
-                    _ => bail!("unsupported pumpfun event discriminator: {discriminator:?}"),
+                    _ => {
+                        debug!("unsupported pumpfun event discriminator: {discriminator:?}");
+                        return Ok(None);
+                    }
                 },
             ))),
             _ => bail!("invariant: program must be filtered in advance"),

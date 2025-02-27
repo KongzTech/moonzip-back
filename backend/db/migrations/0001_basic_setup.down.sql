@@ -12,3 +12,4 @@ DROP DOMAIN IF EXISTS balance;
 
 DROP TABLE IF EXISTS user_info;
 DROP TABLE IF EXISTS static_pool_chain_state;
+DROP TABLE IF EXISTS pumpfun_chain_state;

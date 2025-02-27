@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO pumpfun_chain_state VALUES ($1, $2)\n                ON CONFLICT (mint) DO UPDATE\n                    SET state = excluded.state;\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "pubkey",
+            "kind": {
+              "Domain": "Bytea"
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "pumpfun_curve_state",
+            "kind": {
+              "Composite": [
+                [
+                  "virtual_sol_reserves",
+                  {
+                    "Custom": {
+                      "name": "balance",
+                      "kind": {
+                        "Domain": "Numeric"
+                      }
+                    }
+                  }
+                ],
+                [
+                  "virtual_token_reserves",
+                  {
+                    "Custom": {
+                      "name": "balance",
+                      "kind": {
+                        "Domain": "Numeric"
+                      }
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c3ea08feb2f2b2c3df0578bbdd2b818b57c7633ecd0877a640b78364e88a8c6"
+}

@@ -66,7 +66,10 @@ export const sendTransaction = async (
       wired.toString("base64")
     );
   } catch (error) {
-    console.log("Raw failed transaction: ", JSON.stringify(transaction));
+    console.log(
+      "Raw failed transaction: ",
+      JSON.stringify(transaction, null, 4)
+    );
     if (error instanceof SendTransactionError) {
       console.log(
         "Full logs of failed transaction: ",

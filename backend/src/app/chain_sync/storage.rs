@@ -2,13 +2,13 @@ use std::ops::DerefMut as _;
 
 use moonzip::events::{ProjectChangedEvent, StaticPoolBuyEvent, StaticPoolSellEvent};
 use tokio::{spawn, sync::mpsc::Receiver, task::JoinHandle};
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use crate::app::{
-    chain_sync::parser::MoonzipEvent,
+    chain_sync::parser::{MoonzipEvent, PumpfunEvent},
     storage::{
-        misc::Balance,
-        project::{self, from_chain_project_id},
+        misc::{Balance, StoredPubkey},
+        project::{self, from_chain_project_id, PumpfunCurveState},
         DBTransaction, StorageClient,
     },
 };
@@ -66,8 +66,9 @@ impl<'a> TransactionProcessor<'a> {
         }
     }
 
+    #[instrument(skip(self))]
     async fn process_event(&mut self, event: TrackedEvent) -> anyhow::Result<()> {
-        tracing::trace!("applying event {event:?} on slot {}", self.slot_number);
+        tracing::trace!("applying event on slot {}", self.slot_number);
         match event {
             super::parser::TrackedEvent::Moonzip(event) => match event {
                 MoonzipEvent::ProjectChanged(project_changed) => {
@@ -83,9 +84,11 @@ impl<'a> TransactionProcessor<'a> {
                     error!("some mzip tracked event not implemented")
                 }
             },
-            _ => {
-                error!("some tracked event not implemented")
-            }
+            super::parser::TrackedEvent::Pumpfun(event) => match event {
+                PumpfunEvent::Trade(event) => {
+                    apply_pumpfun_trade(&mut self.transaction, &event).await?;
+                }
+            },
         }
 
         Ok(())
@@ -129,7 +132,7 @@ async fn apply_static_pool_buy(
     sqlx::query!(
         "
                 UPDATE static_pool_chain_state
-                SET collected_lamports = $2
+                SET state.collected_lamports = $2
                 WHERE project_id = $1;
         ",
         &project_id,
@@ -151,11 +154,38 @@ async fn apply_static_pool_sell(
     sqlx::query!(
         "
                 UPDATE static_pool_chain_state
-                SET collected_lamports = $2
+                SET state.collected_lamports = $2
                 WHERE project_id = $1;
         ",
         &project_id,
         &collected_lamports as _
+    )
+    .execute(tx.deref_mut())
+    .await?;
+
+    Ok(())
+}
+
+async fn apply_pumpfun_trade(
+    tx: &mut DBTransaction<'_>,
+    event: &pumpfun_cpi::TradeEvent,
+) -> anyhow::Result<()> {
+    let virtual_sol_reserves = Balance::from(event.virtual_sol_reserves);
+    let virtual_token_reserves = Balance::from(event.virtual_token_reserves);
+    let state = PumpfunCurveState {
+        virtual_token_reserves,
+        virtual_sol_reserves,
+    };
+    let mint = StoredPubkey::from(event.mint);
+
+    sqlx::query!(
+        "
+                INSERT INTO pumpfun_chain_state VALUES ($1, $2)
+                ON CONFLICT (mint) DO UPDATE
+                    SET state = excluded.state;
+        ",
+        mint as _,
+        state as _
     )
     .execute(tx.deref_mut())
     .await?;

@@ -1,8 +1,12 @@
 use crate::app::exposed::{DevLockPeriod, DevPurchase};
 
-use super::misc::{Balance, StoredKeypair, StoredPubkey};
+use super::{
+    misc::{Balance, StoredKeypair, StoredPubkey},
+    DB,
+};
 use bytes::Bytes;
 use chrono::DateTime;
+use const_format::concatcp;
 use futures_util::stream::BoxStream;
 use moonzip::project::{CurvePoolVariant, ProjectSchema, ProjectStage};
 use serde::{Deserialize, Serialize};
@@ -173,6 +177,84 @@ impl StoredDeploySchema {
 pub enum CurveVariant {
     Moonzip,
     Pumpfun,
+}
+
+#[derive(Debug, Clone, sqlx::Type)]
+#[sqlx(type_name = "static_pool_state")]
+pub struct StaticPoolState {
+    pub collected_lamports: Balance,
+}
+
+#[derive(Debug, Clone, sqlx::Type)]
+#[sqlx(type_name = "pumpfun_curve_state")]
+pub struct PumpfunCurveState {
+    pub virtual_sol_reserves: Balance,
+    pub virtual_token_reserves: Balance,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct FullProjectState {
+    #[sqlx(flatten)]
+    pub project: StoredProject,
+    pub static_pool_state: Option<StaticPoolState>,
+    pub pumpfun_curve_state: Option<PumpfunCurveState>,
+}
+
+impl FullProjectState {
+    pub const QUERY_BODY: &str = r#"
+            SELECT
+                project.id AS id,
+                project.owner AS owner,
+                project.deploy_schema AS deploy_schema,
+                project.stage AS stage,
+                project.static_pool_pubkey AS static_pool_pubkey,
+                project.curve_pool_keypair AS curve_pool_keypair,
+                project.dev_lock_keypair AS dev_lock_keypair,
+                project.created_at AS created_at,
+                static_pool_chain_state.state AS static_pool_state,
+                pumpfun_chain_state.state AS pumpfun_curve_state
+            FROM project
+            LEFT JOIN static_pool_chain_state ON project.id = static_pool_chain_state.project_id
+            LEFT JOIN pumpfun_chain_state ON pumpfun_chain_state.mint = kp_to_pubkey(project.curve_pool_keypair)
+    "#;
+
+    pub fn only_project(project: StoredProject) -> Self {
+        Self {
+            project,
+            static_pool_state: None,
+            pumpfun_curve_state: None,
+        }
+    }
+
+    pub async fn query<'c, E: sqlx::Executor<'c, Database = DB>>(
+        executor: E,
+        project_id: &ProjectId,
+    ) -> anyhow::Result<Self> {
+        Ok(sqlx::query_as(concatcp!(
+            FullProjectState::QUERY_BODY,
+            "WHERE project.id = $1"
+        ))
+        .bind(project_id)
+        .fetch_one(executor)
+        .await?)
+    }
+}
+
+impl FullProjectState {
+    pub fn should_close_static_pool(&self) -> bool {
+        let pool_schema = self
+            .project
+            .deploy_schema
+            .static_pool
+            .as_ref()
+            .expect("no static pool in project deploy schema");
+
+        let current_ts = TZ::now().timestamp();
+
+        let mut is_closed = false;
+        is_closed = is_closed || (current_ts >= pool_schema.launch_ts);
+        is_closed
+    }
 }
 
 #[cfg(test)]

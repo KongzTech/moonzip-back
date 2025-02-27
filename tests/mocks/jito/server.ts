@@ -46,15 +46,18 @@ class MockJitoService {
     encoding: string = "base64"
   ): Promise<string> {
     const bundleId = `bundle-${Math.random().toString(36).substring(7)}`; // Generate a random bundle ID
+    let transactionIdx = 1;
 
     // Send and confirm each transaction in the bundle
     for (const encodedTx of encodedTransactions) {
+      console.log(`Sending transaction #${transactionIdx}`);
       try {
         await this.sendTransaction(encodedTx, encoding);
       } catch (error) {
         console.error("Failed to send transaction in bundle:", error);
         throw new Error("Failed to send bundle");
       }
+      transactionIdx += 1;
     }
 
     return bundleId;

@@ -20,8 +20,9 @@ use services_common::utils::period_fetch::DataReceiver;
 use solana_sdk::{signature::Keypair, signer::Signer, transaction::Transaction};
 use sqlx::query_as;
 use std::{pin::pin, time::Duration};
+use storage::project::FullProjectState;
 use storage::user_info::StoredUserInfo;
-use storage::{project::StoredProject, StorageClient};
+use storage::StorageClient;
 use tokio::io::AsyncRead;
 use tracing::debug;
 use uuid::Uuid;
@@ -100,7 +101,8 @@ impl App {
             curve_pool_keypair: None,
             created_at: chrono::Utc::now(),
         };
-        let mut builder = self.instructions_builder.for_project(&project)?;
+        let full_project_state = FullProjectState::only_project(project);
+        let mut builder = self.instructions_builder.for_project(&full_project_state)?;
         let mut ixs = vec![];
         ixs.extend(builder.create_project(SampleMetadata {
             name: &request.meta.name,
@@ -111,6 +113,7 @@ impl App {
             ixs.extend(builder.init_static_pool(keypair)?);
         }
 
+        let project = full_project_state.project;
         let mut tx = self.storage.serializable_tx().await?;
 
         sqlx::query!(
@@ -171,9 +174,9 @@ impl App {
     }
 
     pub async fn buy(&self, request: BuyRequest) -> anyhow::Result<BuyResponse> {
-        let project = self.get_full_project(request.project_id).await?;
+        let project = FullProjectState::query(&self.storage.pool, &request.project_id).await?;
 
-        let builder = self.instructions_builder.for_project(&project)?;
+        let mut builder = self.instructions_builder.for_project(&project)?;
         let ixs = builder.buy(request.user, request.sols, request.min_token_output)?;
         let mut tx = Transaction::new_with_payer(&ixs, Some(&request.user));
         let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
@@ -183,9 +186,9 @@ impl App {
     }
 
     pub async fn sell(&self, request: SellRequest) -> anyhow::Result<SellResponse> {
-        let project = self.get_full_project(request.project_id).await?;
+        let project = FullProjectState::query(&self.storage.pool, &request.project_id).await?;
 
-        let builder = self.instructions_builder.for_project(&project)?;
+        let mut builder = self.instructions_builder.for_project(&project)?;
         let ixs = builder.sell(request.user, request.tokens, request.min_sol_output)?;
         let mut tx = Transaction::new_with_payer(&ixs, Some(&request.user));
         let recent_blockhash = self.solana_meta.clone().get()?.recent_blockhash;
@@ -197,11 +200,11 @@ impl App {
         &self,
         request: DevLockClaimRequest,
     ) -> anyhow::Result<DevLockClaimResponse> {
-        let project = self.get_full_project(request.project_id).await?;
+        let project = FullProjectState::query(&self.storage.pool, &request.project_id).await?;
 
         let builder = self.instructions_builder.for_project(&project)?;
         let ixs = builder.claim_dev_lock()?;
-        let tx = Transaction::new_with_payer(&ixs, Some(&project.owner.to_pubkey()));
+        let tx = Transaction::new_with_payer(&ixs, Some(&project.project.owner.to_pubkey()));
 
         Ok(DevLockClaimResponse { transaction: tx })
     }
@@ -242,26 +245,6 @@ impl App {
         Ok(GetProjectResponse {
             project: Some(project),
         })
-    }
-
-    async fn get_full_project(&self, project_id: Uuid) -> anyhow::Result<StoredProject> {
-        let project = query_as!(
-            StoredProject,
-            r#"SELECT
-                id,
-                owner,
-                deploy_schema AS "deploy_schema: _",
-                stage AS "stage: _",
-                static_pool_pubkey AS "static_pool_pubkey?: _",
-                curve_pool_keypair AS "curve_pool_keypair?: _",
-                dev_lock_keypair AS "dev_lock_keypair?: _",
-                created_at
-            FROM project WHERE id = $1"#,
-            project_id as _,
-        )
-        .fetch_one(&self.storage.pool)
-        .await?;
-        Ok(project)
     }
 
     pub async fn upsert_user_info(

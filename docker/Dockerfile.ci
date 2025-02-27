@@ -8,7 +8,7 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     /bin/bash -c "source ~/.nvm/nvm.sh && nvm install ${NODE_VERSION} && nvm use ${NODE_VERSION} && nvm alias default node && corepack enable"
 
 RUN rustup default 1.82.0 && rustup component add rustfmt clippy && \
-    cargo install sqlx-cli --no-default-features --features native-tls,postgres
+    cargo install sqlx-cli --git https://github.com/decr1x/sqlx.git --branch v0.8.0-fix  --no-default-features --features native-tls,postgres
 
 ENV PATH=/app/target/release:/app/target/debug:$PATH
 
@@ -21,6 +21,8 @@ ENV MOONZIP_AUTHORITY=$MOONZIP_AUTHORITY
 WORKDIR /app
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=$HOME/.cargo/git \
+    --mount=type=cache,target=$HOME/.cargo/registry \
     --mount=type=cache,target=/app/target \
     --mount=type=cache,target=/root/app/node_modules \
     make build && make build-program && yarn install && \
@@ -29,19 +31,3 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp ./target/debug/chain_syncer /usr/local/bin/chain_syncer && \
     cp ./target/deploy/moonzip.so . && cp -r ./target/idl . && \
     solana-keygen new --no-passphrase
-
-# build release version of apps
-FROM base AS build-release
-
-ARG MOONZIP_AUTHORITY
-ENV MOONZIP_AUTHORITY=$MOONZIP_AUTHORITY
-
-WORKDIR /app
-COPY . .
-RUN make build-release
-
-# prod-ready image to run on the end-nodes.
-FROM build-release AS prod
-
-WORKDIR /app
-COPY --from=build-release /app/target/release /app/target/release
