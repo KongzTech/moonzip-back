@@ -145,7 +145,7 @@ impl Migrator {
             spawn(async move {
                 let id = executor.project_state.project.id;
                 if let Err(err) = executor.migrate().await {
-                    warn!("failed to execute migration for project({:?}): {err:#}", id);
+                    warn!("failed to execute migration for project({:?}): {err:?}", id);
                 }
             });
         }
@@ -395,6 +395,13 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .instructions
             .append(&mut ix_builder.unlock_project()?);
 
+        // it's ok to add jito tip *after* project's bank is unlocked -
+        // we don't really track it as it's dynamic.
+        let jito_meta = self.tools.jito_meta_rx.clone().get()?;
+        second_tx
+            .instructions
+            .push(jito_meta.tip_ix(&PROGRAM_AUTHORITY));
+
         let txs = vec![first_tx, second_tx];
         self.tools.tx_executor.execute_batch(txs).await?;
 
@@ -406,12 +413,18 @@ impl<'a, 'b> Deployer<'a, 'b> {
             .tools
             .instructions_builder
             .for_project(self.project_state)?;
-        let mut first_tx = ix_builder.graduate_curve_pool()?;
-        let (openbook_market, mut openbook_market_ix) = ix_builder.prepare_openbook_market()?;
-        first_tx.append(&mut openbook_market_ix);
+
+        let mut first_tx = vec![];
+        first_tx.append(&mut ix_builder.graduate_curve_pool()?);
+        first_tx.append(&mut ix_builder.prepare_openbook_market_vaults()?);
+        first_tx.append(&mut ix_builder.reward_creator_on_graduate()?);
 
         let jito_meta = self.tools.jito_meta_rx.clone().get()?;
         first_tx.push(jito_meta.tip_ix(&PROGRAM_AUTHORITY));
+
+        let mut second_tx = vec![];
+        let mut openbook_market_ix = ix_builder.initialize_openbook_market()?;
+        second_tx.append(&mut openbook_market_ix);
 
         let curve_config = self
             .tools
@@ -424,11 +437,11 @@ impl<'a, 'b> Deployer<'a, 'b> {
         let tokens_amount =
             curve_config.total_token_supply - curve_config.initial_real_token_reserves;
 
-        let second_tx = ix_builder.deploy_to_raydium(
-            &openbook_market,
+        let mut third_tx = vec![];
+        third_tx.append(&mut ix_builder.deploy_to_raydium(
             tokens_amount,
-            self.tools.instructions_builder.config.rayidum_liquidity,
-        )?;
+            self.tools.instructions_builder.config.raydium_liquidity,
+        )?);
 
         let signer = self.tools.solana_keys.authority_keypair().to_keypair();
 
@@ -442,6 +455,11 @@ impl<'a, 'b> Deployer<'a, 'b> {
                 },
                 TransactionRequest {
                     instructions: second_tx,
+                    signers: vec![signer.insecure_clone()],
+                    payer: signer.insecure_clone(),
+                },
+                TransactionRequest {
+                    instructions: third_tx,
                     signers: vec![signer.insecure_clone()],
                     payer: signer.insecure_clone(),
                 },

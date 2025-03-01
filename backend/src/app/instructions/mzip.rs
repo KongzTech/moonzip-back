@@ -1,4 +1,5 @@
 use anchor_client::anchor_lang::AccountDeserialize as _;
+use anchor_spl::associated_token::get_associated_token_address;
 use anyhow::Context as _;
 use moonzip::{
     fee::{FeeAccount, FEE_ACCOUNT_PREFIX},
@@ -6,9 +7,32 @@ use moonzip::{
 };
 use once_cell::sync::Lazy;
 use services_common::{solana::pool::SolanaPool, utils::period_fetch::FetchExecutor};
-use solana_sdk::{commitment_config::CommitmentConfig, pubkey::Pubkey};
+use solana_sdk::{commitment_config::CommitmentConfig, instruction::Instruction, pubkey::Pubkey};
 
-use super::utils::anchor_event_authority;
+use super::{utils::anchor_event_authority, ProjectsOperations};
+
+impl<'a> ProjectsOperations<'a> {
+    pub fn burn_and_close(
+        &self,
+        authority: Pubkey,
+        mint: Pubkey,
+    ) -> anyhow::Result<Vec<Instruction>> {
+        let client = self.solana_pool.builder();
+        let program = client.program(moonzip::ID)?;
+
+        Ok(program
+            .request()
+            .accounts(moonzip::accounts::BurnAndCloseAccounts {
+                authority,
+                mint,
+                token_account: get_associated_token_address(&authority, &mint),
+                token_program: anchor_spl::token::ID,
+                associated_token_program: anchor_spl::associated_token::ID,
+            })
+            .args(moonzip::instruction::BurnAndClose {})
+            .instructions()?)
+    }
+}
 
 pub static MOONZIP_EVENT_AUTHORITY: Lazy<Pubkey> =
     Lazy::new(|| anchor_event_authority(&moonzip::ID));

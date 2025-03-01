@@ -88,7 +88,7 @@ export const sendTransaction = async (
       continue;
     }
     if (status.value.err) {
-      throw new Error(`transaction failed: ${status.value.err}`);
+      throw new Error(`transaction failed: ${JSON.stringify(status)}`);
     }
     if (
       status.value.confirmationStatus == "confirmed" ||

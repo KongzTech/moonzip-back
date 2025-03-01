@@ -124,9 +124,13 @@ impl Project {
     pub fn ensure_can_graduate(&self) -> Result<()> {
         // pumpfun also counts as graduation.
         if self.schema.curve_pool == CurvePoolVariant::Pumpfun {
-            if self.schema.use_static_pool && self.stage != ProjectStage::StaticPoolClosed {
-                msg!("static pool must be closed before graduating to pumpfun");
-                return err!(ProjectError::NotReadyForGraduation);
+            if self.schema.use_static_pool {
+                if self.stage != ProjectStage::StaticPoolClosed {
+                    msg!("static pool must be closed before graduating to pumpfun");
+                    return err!(ProjectError::NotReadyForGraduation);
+                }
+            } else if self.stage != ProjectStage::Created {
+                return err!(ProjectError::AlreadyGraduated);
             }
             return Ok(());
         }

@@ -1,5 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
-import { BN } from "@coral-xyz/anchor";
+import { BN, Program } from "@coral-xyz/anchor";
 import { components, paths } from "../../clients/backend_client";
 
 import {
@@ -12,9 +12,11 @@ import { expect } from "chai";
 import {
   airdrop,
   beforeAll,
+  calculateFixedTokensPurchase,
   devLockEscrow,
   expectNoATA,
   getProvider,
+  RAYDIUM_CREATE_FEE_ACCOUNT,
   tokenBalance,
 } from "../utils/utils";
 import createClient from "openapi-fetch";
@@ -29,6 +31,8 @@ import {
   withTimeout,
 } from "../utils/helpers";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { Moonzip } from "../../target/types/moonzip";
+import { getCurvedPoolAddress } from "../program/curved_pool";
 
 const imagePath = "./tests/data/moon.png";
 const apiHost = process.env.MOONZIP_API_HOST || "http://app-api:8080";
@@ -442,10 +446,57 @@ async function testGraduateRaydium() {
     let buyer = Keypair.generate();
     let sols = new BN(LAMPORTS_PER_SOL).mul(new BN(8));
     await airdrop(buyer.publicKey, sols.add(new BN(0.2 * LAMPORTS_PER_SOL)));
-    await buyFromProject(project.id, buyer, sols, 0);
+    await buyFromProject(project.id, buyer, sols.toNumber(), 0);
   }
 
+  const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
+  const poolAddress = getCurvedPoolAddress(
+    new PublicKey(project.curvePoolMint)
+  );
+  let curvePoolState = (
+    await main_program.account.curvedPool.fetch(poolAddress)
+  ).curve;
+  let tokensLeft = curvePoolState.realTokenReserves;
+  let solsLeft = calculateFixedTokensPurchase(curvePoolState, tokensLeft);
+
+  let collected_raydium_fee_before = await connection.getBalance(
+    RAYDIUM_CREATE_FEE_ACCOUNT
+  );
+  let buyer = Keypair.generate();
+  await airdrop(buyer.publicKey, solsLeft.add(new BN(0.2 * LAMPORTS_PER_SOL)));
+  await buyFromProject(project.id, buyer, solsLeft.toNumber(), 0);
+
   project = await waitForProject(projectResult.projectId, "graduated");
+
+  // we additionally wait for raydium to receive fee, as jito mock isn't atomic -
+  // meaning account update might be received too early.
+  await waitForOk(async () => {
+    let balance = await connection.getBalance(RAYDIUM_CREATE_FEE_ACCOUNT);
+    if (collected_raydium_fee_before == balance) {
+      throw new Error(
+        `yet unchanged, meaning raydium is not created yet: ${balance}`
+      );
+    }
+  });
+
+  let finalBuyer = Keypair.generate();
+  let finalPurchase = new BN(LAMPORTS_PER_SOL);
+  await airdrop(
+    finalBuyer.publicKey,
+    finalPurchase.add(new BN(0.5 * LAMPORTS_PER_SOL))
+  );
+  await buyFromProject(project.id, finalBuyer, finalPurchase.toNumber(), 0);
+
+  let finalBalance = await tokenBalance(
+    new PublicKey(project.curvePoolMint),
+    finalBuyer.publicKey
+  );
+  expect(finalBalance).to.gt(100_000);
+
+  let minOutput = finalPurchase.sub(new BN(0.1 * LAMPORTS_PER_SOL)).toNumber();
+  await sellToProject(project.id, finalBuyer, finalBalance, minOutput);
+  let solBalanceAfterSell = await connection.getBalance(finalBuyer.publicKey);
+  expect(solBalanceAfterSell).to.gte(minOutput);
 }
 
 describe("projects operations", () => {
@@ -476,8 +527,7 @@ describe("projects operations", () => {
     await testDevLockWorks("pumpfun");
   });
 
-  // TODO: finish with raydium
-  // it("buy to graduate to raydium, ensure correct graduation", async () => {
-  //   await testGraduateRaydium();
-  // });
+  it("moonzip: buy to graduate to raydium, ensure correct graduation", async () => {
+    await testGraduateRaydium();
+  });
 });

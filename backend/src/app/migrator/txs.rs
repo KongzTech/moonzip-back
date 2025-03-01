@@ -196,7 +196,26 @@ pub struct TransactionRequest {
 impl TransactionRequest {
     fn signed(&self, recent_blockhash: Hash) -> anyhow::Result<AnyTx> {
         let mut tx = Transaction::new_with_payer(&self.instructions, Some(&self.payer.pubkey()));
-        tx.try_sign(&self.signers.iter().collect::<Vec<_>>(), recent_blockhash)?;
+        tx.try_sign(&self.signers.iter().collect::<Vec<_>>(), recent_blockhash)
+            .map_err(|err| {
+                let signers: Vec<_> = self
+                    .instructions
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ix_idx, instruction)| {
+                        instruction
+                            .accounts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, account)| account.is_signer)
+                            .map(move |(account_idx, account)| {
+                                (ix_idx, account_idx, account.pubkey)
+                            })
+                    })
+                    .collect();
+
+                anyhow::anyhow!("failed to sign transaction, signers: {signers:#?}, err: {err:?}")
+            })?;
         Ok(AnyTx::from(tx))
     }
 }

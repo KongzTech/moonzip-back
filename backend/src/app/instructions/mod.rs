@@ -27,11 +27,10 @@ use moonzip::{
 use mpl::SampleMetadata;
 use mpl_token_metadata::instructions::CreateV1Builder;
 use mzip::{FEE_ACCOUNT, MOONZIP_EVENT_AUTHORITY};
-use openbook::OpenbookInstructionsBuilder;
 use serde::Deserialize;
 use serde_with::{serde_as, DurationSeconds};
-use serum_dex::instruction::initialize_market;
 use services_common::{solana::pool::SolanaPool, utils::period_fetch::DataReceiver, TZ};
+use sha2::{Digest, Sha256};
 use solana_sdk::{
     instruction::Instruction,
     native_token::{sol_to_lamports, LAMPORTS_PER_SOL},
@@ -40,6 +39,7 @@ use solana_sdk::{
     rent::Rent,
     signature::Keypair,
     signer::Signer as _,
+    system_instruction,
 };
 use std::{str::FromStr, sync::Arc, time::Duration};
 use utils::anchor_event_authority;
@@ -70,8 +70,8 @@ pub struct InstructionsConfig {
 
     #[serde(default = "default_sols_to_graduate")]
     pub sols_to_graduate: u64,
-    #[serde(default = "default_rayidum_liquidity")]
-    pub rayidum_liquidity: u64,
+    #[serde(default = "default_raydium_liquidity")]
+    pub raydium_liquidity: u64,
     #[serde(default = "default_creator_graduate_reward")]
     pub creator_graduate_reward: u64,
     #[serde(default = "default_pumpfun_init_price")]
@@ -129,7 +129,7 @@ fn default_sols_to_graduate() -> u64 {
     LAMPORTS_PER_SOL * 85
 }
 
-fn default_rayidum_liquidity() -> u64 {
+fn default_raydium_liquidity() -> u64 {
     LAMPORTS_PER_SOL * 79
 }
 
@@ -332,6 +332,14 @@ impl<'a> ProjectsOperations<'a> {
             .instructions()?;
 
         Ok(ix)
+    }
+
+    pub fn reward_creator_on_graduate(&self) -> anyhow::Result<Vec<Instruction>> {
+        Ok(vec![system_instruction::transfer(
+            &PROGRAM_AUTHORITY,
+            &self.project_state.project.owner.to_pubkey(),
+            self.config.creator_graduate_reward,
+        )])
     }
 
     pub fn init_transmuter(&mut self) -> anyhow::Result<Vec<Instruction>> {
@@ -638,7 +646,8 @@ impl<'a> ProjectsOperations<'a> {
 
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
-        let pool_address = curved_pool_address(self.curve_mint()?);
+        let curve_mint = self.curve_mint()?;
+        let pool_address = curved_pool_address(curve_mint);
         let project_id = project_id(&self.project_state.project.id);
 
         let ix = program
@@ -649,8 +658,16 @@ impl<'a> ProjectsOperations<'a> {
                 authority: moonzip::PROGRAM_AUTHORITY,
                 project: project_address(&project_id),
                 fee: fee_address(),
+                mint: curve_mint,
+
                 funds_receiver: moonzip::PROGRAM_AUTHORITY,
+                funds_receiver_ata: get_associated_token_address(
+                    &moonzip::PROGRAM_AUTHORITY,
+                    &curve_mint,
+                ),
+
                 pool: pool_address,
+                pool_ata: get_associated_token_address(&pool_address, &curve_mint),
 
                 program: moonzip::ID,
                 system_program: solana_sdk::system_program::ID,
@@ -663,60 +680,6 @@ impl<'a> ProjectsOperations<'a> {
             .instructions()?;
 
         Ok(ix)
-    }
-
-    pub fn prepare_openbook_market(&self) -> anyhow::Result<(Pubkey, Vec<Instruction>)> {
-        let curve_mint = self.curve_mint()?;
-        let builder = OpenbookInstructionsBuilder {
-            rent: &self.rent,
-            payer: &PROGRAM_AUTHORITY,
-            mint: &curve_mint,
-            program_id: &self.config.serum_openbook_program,
-        };
-        let (market, create_market_ix) = builder.create_market_account()?;
-
-        let (request_queue, request_queue_ix) = builder.create_queue_account("request", 764)?;
-        let (event_queue, event_queue_ix) = builder.create_queue_account("event", 11308)?;
-        let (bids, bids_ix) = builder.create_queue_account("bids", 14524)?;
-        let (asks, asks_ix) = builder.create_queue_account("asks", 14524)?;
-
-        let coin_mint_pk = &WRAPPED_SOL_MINT;
-        let coin_vault_pk = get_associated_token_address(&market, coin_mint_pk);
-
-        let pc_mint_pk = curve_mint;
-        let pc_vault_pk = get_associated_token_address(&market, &pc_mint_pk);
-
-        let initialize_market_ix = initialize_market(
-            &market,
-            &self.config.serum_openbook_program,
-            coin_mint_pk,
-            &pc_mint_pk,
-            &coin_vault_pk,
-            &pc_vault_pk,
-            None,
-            None,
-            None,
-            &bids,
-            &asks,
-            &request_queue,
-            &event_queue,
-            6447184,
-            64,
-            0,
-            64,
-        )?;
-
-        Ok((
-            market,
-            vec![
-                create_market_ix,
-                bids_ix,
-                asks_ix,
-                request_queue_ix,
-                event_queue_ix,
-                initialize_market_ix,
-            ],
-        ))
     }
 
     pub fn lock_dev(&self) -> anyhow::Result<Vec<Instruction>> {
@@ -972,31 +935,27 @@ impl<'a> ProjectsOperations<'a> {
             .deploy_schema
             .static_pool
             .is_some();
+        let buy_params = BuyParams {
+            user,
+            sols,
+            min_token_output: min_token_output.unwrap_or(0),
+        };
         match self.project_state.project.stage {
-            Stage::OnStaticPool => ixs.append(&mut self.buy_from_static_pool(user, sols)?),
+            Stage::OnStaticPool => ixs.append(&mut self.buy_from_static_pool(buy_params)?),
             Stage::OnCurvePool => {
                 if has_static_pool {
                     ixs.append(&mut self.transmute_idempotent(user)?);
                 }
-                ixs.append(&mut self.buy_from_curve_pool(
-                    user,
-                    sols,
-                    min_token_output.unwrap_or(0),
-                )?);
+                ixs.append(&mut self.buy_from_curve_pool(buy_params)?);
             }
             Stage::Graduated => {
                 if has_static_pool {
                     ixs.append(&mut self.transmute_idempotent(user)?);
                 }
-                // TODO: handle raydium detection and raydium purchases
                 if self.project_state.project.deploy_schema.curve_pool == CurveVariant::Pumpfun {
-                    ixs.append(&mut self.buy_from_pumpfun(
-                        user,
-                        sols,
-                        min_token_output.unwrap_or(0),
-                    )?);
+                    ixs.append(&mut self.buy_from_pumpfun(buy_params)?);
                 } else {
-                    bail!("request to buy from raydium, yet unimplemented");
+                    ixs.append(&mut self.buy_from_raydium(buy_params)?);
                 }
             }
             _ => bail!(
@@ -1008,7 +967,7 @@ impl<'a> ProjectsOperations<'a> {
         Ok(ixs)
     }
 
-    fn buy_from_static_pool(&self, user: Pubkey, sols: u64) -> anyhow::Result<Vec<Instruction>> {
+    fn buy_from_static_pool(&self, params: BuyParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
@@ -1029,9 +988,9 @@ impl<'a> ProjectsOperations<'a> {
 
                 fee: *FEE_ACCOUNT,
                 project: project_address,
-                user,
+                user: params.user,
                 mint: static_pool_mint,
-                user_mint_account: get_associated_token_address(&user, &static_pool_mint),
+                user_mint_account: get_associated_token_address(&params.user, &static_pool_mint),
                 pool_mint_account: get_associated_token_address(&pool, &static_pool_mint),
                 pool,
 
@@ -1042,17 +1001,15 @@ impl<'a> ProjectsOperations<'a> {
                 associated_token_program: anchor_spl::associated_token::ID,
             })
             .args(moonzip::instruction::BuyFromStaticPool {
-                data: BuyFromStaticPoolData { project_id, sols },
+                data: BuyFromStaticPoolData {
+                    project_id,
+                    sols: params.sols,
+                },
             })
             .instructions()?)
     }
 
-    fn buy_from_curve_pool(
-        &self,
-        user: Pubkey,
-        sols: u64,
-        min_token_output: u64,
-    ) -> anyhow::Result<Vec<Instruction>> {
+    fn buy_from_curve_pool(&self, params: BuyParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
@@ -1069,9 +1026,9 @@ impl<'a> ProjectsOperations<'a> {
                 authority: moonzip::PROGRAM_AUTHORITY,
                 project: project_address,
                 fee: fee_address(),
-                user,
+                user: params.user,
                 mint: curve_mint,
-                user_token_account: get_associated_token_address(&user, &curve_mint),
+                user_token_account: get_associated_token_address(&params.user, &curve_mint),
                 pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
                 pool: curve_pool,
 
@@ -1083,19 +1040,14 @@ impl<'a> ProjectsOperations<'a> {
             .args(moonzip::instruction::BuyFromCurvedPool {
                 data: BuyFromCurvedPoolData {
                     project_id,
-                    sols,
-                    min_token_output,
+                    sols: params.sols,
+                    min_token_output: params.min_token_output,
                 },
             })
             .instructions()?)
     }
 
-    fn buy_from_pumpfun(
-        &mut self,
-        user: Pubkey,
-        sols: u64,
-        min_token_output: u64,
-    ) -> anyhow::Result<Vec<Instruction>> {
+    fn buy_from_pumpfun(&mut self, params: BuyParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
@@ -1115,8 +1067,8 @@ impl<'a> ProjectsOperations<'a> {
                 bonding_curve,
                 associated_bonding_curve,
 
-                associated_user: get_associated_token_address(&user, &curve_mint),
-                user,
+                associated_user: get_associated_token_address(&params.user, &curve_mint),
+                user: params.user,
 
                 system_program: solana_sdk::system_program::ID,
                 token_program: anchor_spl::token::ID,
@@ -1126,8 +1078,8 @@ impl<'a> ProjectsOperations<'a> {
             })
             .args(BuyFromPump {
                 data: BuyFromPumpData {
-                    sols,
-                    min_token_output,
+                    sols: params.sols,
+                    min_token_output: params.min_token_output,
                 },
             })
             .instructions()?;
@@ -1148,28 +1100,31 @@ impl<'a> ProjectsOperations<'a> {
             .is_some();
 
         let mut ixs = vec![];
+        let sell_params = SellParams {
+            user,
+            tokens,
+            min_sol_output: min_sol_output.unwrap_or_default(),
+        };
 
         match self.project_state.project.stage {
             Stage::OnStaticPool => {
-                ixs.append(&mut self.sell_to_static_pool(user, tokens)?);
+                ixs.append(&mut self.sell_to_static_pool(sell_params)?);
             }
             Stage::OnCurvePool => {
                 if has_static_pool {
                     ixs.append(&mut self.transmute_idempotent(user)?);
                 }
-                ixs.append(&mut self.sell_to_curve_pool(
-                    user,
-                    tokens,
-                    min_sol_output.unwrap_or(0),
-                )?);
+                ixs.append(&mut self.sell_to_curve_pool(sell_params)?);
             }
-            Stage::Graduated
-                if self.project_state.project.deploy_schema.curve_pool == CurveVariant::Pumpfun =>
-            {
+            Stage::Graduated => {
                 if has_static_pool {
                     ixs.append(&mut self.transmute_idempotent(user)?);
                 }
-                ixs.append(&mut self.sell_to_pumpfun(user, tokens, min_sol_output.unwrap_or(0))?);
+                if self.project_state.project.deploy_schema.curve_pool == CurveVariant::Pumpfun {
+                    ixs.append(&mut self.sell_to_pumpfun(sell_params)?);
+                } else {
+                    ixs.append(&mut self.sell_to_raydium(sell_params)?);
+                }
             }
             _ => {
                 bail!(
@@ -1182,7 +1137,7 @@ impl<'a> ProjectsOperations<'a> {
         Ok(ixs)
     }
 
-    fn sell_to_static_pool(&self, user: Pubkey, tokens: u64) -> anyhow::Result<Vec<Instruction>> {
+    fn sell_to_static_pool(&self, params: SellParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
@@ -1202,9 +1157,9 @@ impl<'a> ProjectsOperations<'a> {
 
                 fee: *FEE_ACCOUNT,
                 project: project_address,
-                user,
+                user: params.user,
                 mint: static_pool_mint,
-                user_token_account: get_associated_token_address(&user, &static_pool_mint),
+                user_token_account: get_associated_token_address(&params.user, &static_pool_mint),
                 pool_token_account: get_associated_token_address(&pool, &static_pool_mint),
                 pool,
 
@@ -1215,17 +1170,15 @@ impl<'a> ProjectsOperations<'a> {
                 associated_token_program: anchor_spl::associated_token::ID,
             })
             .args(moonzip::instruction::SellToStaticPool {
-                data: SellToStaticPoolData { project_id, tokens },
+                data: SellToStaticPoolData {
+                    project_id,
+                    tokens: params.tokens,
+                },
             })
             .instructions()?)
     }
 
-    fn sell_to_curve_pool(
-        &self,
-        user: Pubkey,
-        tokens: u64,
-        min_sol_output: u64,
-    ) -> anyhow::Result<Vec<Instruction>> {
+    fn sell_to_curve_pool(&self, params: SellParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(moonzip::ID)?;
 
@@ -1235,17 +1188,6 @@ impl<'a> ProjectsOperations<'a> {
         let curve_mint = self.curve_mint()?;
         let curve_pool = get_curved_pool_address(curve_mint);
 
-        let mut ixs = vec![];
-        if self
-            .project_state
-            .project
-            .deploy_schema
-            .static_pool
-            .is_some()
-        {
-            ixs.append(&mut self.transmute_idempotent(user)?);
-        }
-
         Ok(program
             .request()
             .accounts(moonzip::accounts::SellFromCurvedPoolAccounts {
@@ -1253,9 +1195,9 @@ impl<'a> ProjectsOperations<'a> {
 
                 fee: fee_address(),
                 project: project_address,
-                user,
+                user: params.user,
                 mint: curve_mint,
-                user_token_account: get_associated_token_address(&user, &curve_mint),
+                user_token_account: get_associated_token_address(&params.user, &curve_mint),
                 pool_token_account: get_associated_token_address(&curve_pool, &curve_mint),
                 pool: curve_pool,
 
@@ -1268,19 +1210,14 @@ impl<'a> ProjectsOperations<'a> {
             .args(moonzip::instruction::SellFromCurvedPool {
                 data: SellFromCurvedPoolData {
                     project_id,
-                    tokens,
-                    min_sol_output,
+                    tokens: params.tokens,
+                    min_sol_output: params.min_sol_output,
                 },
             })
             .instructions()?)
     }
 
-    fn sell_to_pumpfun(
-        &mut self,
-        user: Pubkey,
-        tokens: u64,
-        min_sol_output: u64,
-    ) -> anyhow::Result<Vec<Instruction>> {
+    fn sell_to_pumpfun(&mut self, params: SellParams) -> anyhow::Result<Vec<Instruction>> {
         let client = self.solana_pool.builder();
         let program = client.program(pumpfun_cpi::ID)?;
 
@@ -1300,8 +1237,8 @@ impl<'a> ProjectsOperations<'a> {
                 bonding_curve,
                 associated_bonding_curve,
 
-                associated_user: get_associated_token_address(&user, &curve_mint),
-                user,
+                associated_user: get_associated_token_address(&params.user, &curve_mint),
+                user: params.user,
 
                 system_program: solana_sdk::system_program::ID,
                 token_program: anchor_spl::token::ID,
@@ -1309,8 +1246,8 @@ impl<'a> ProjectsOperations<'a> {
                 associated_token_program: associated_token::ID,
             })
             .args(pumpfun_cpi::instruction::Sell {
-                _amount: tokens,
-                _min_sol_output: min_sol_output,
+                _amount: params.tokens,
+                _min_sol_output: params.min_sol_output,
             })
             .instructions()?;
         Ok(ixs)
@@ -1376,6 +1313,39 @@ impl<'a> ProjectsOperations<'a> {
             .ok_or_else(|| anyhow::anyhow!("invariant: no static pool mint"))?;
         Ok(static_pool_mint)
     }
+
+    /// Seed is needed for deriving pubkeys.
+    fn project_seed(&self) -> String {
+        self.project_state.project.id.simple().to_string()
+    }
+
+    /// It allows generating unique solana-conforming seeds,
+    /// which are practically unique as long as combination (project_id, extra_seed) is unique.
+    ///
+    /// Lets say you want to generate market account that is bound to specific project.
+    /// You decide that seed would be "openbook_market" - it would be extra_seed parameter.
+    /// Then resulting String is unique across all projects.
+    fn project_derived_seed(&self, extra_seed: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{}__{extra_seed}", self.project_seed()).into_bytes());
+        let mut result = format!("{:x}", hasher.finalize());
+        result.truncate(32);
+        result
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BuyParams {
+    user: Pubkey,
+    sols: u64,
+    min_token_output: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SellParams {
+    user: Pubkey,
+    tokens: u64,
+    min_sol_output: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1396,6 +1366,12 @@ pub struct TransmuterInitArgs {
     pub from_mint: Pubkey,
     pub to_mint: Pubkey,
     pub donor: Pubkey,
+}
+
+#[derive(Debug, Clone)]
+pub struct SeedDerivedPubkey {
+    pub key: Pubkey,
+    pub seed: String,
 }
 
 fn get_transmuter_address(from_mint: Pubkey, to_mint: Pubkey) -> Pubkey {

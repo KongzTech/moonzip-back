@@ -4,6 +4,7 @@ pub mod common;
 pub mod curved_pool;
 pub mod events;
 pub mod fee;
+pub mod misc;
 pub mod project;
 pub mod pumpfun;
 pub mod static_pool;
@@ -18,6 +19,7 @@ pub mod moonzip {
     pub use super::curved_pool::global::*;
     pub use super::curved_pool::*;
     pub use super::fee::*;
+    pub use super::misc::*;
     pub use super::project::*;
     pub use super::pumpfun::*;
     pub use super::static_pool::*;
@@ -138,5 +140,9 @@ pub mod moonzip {
 
     pub fn buy_from_pump(ctx: Context<BuyFromPumpAccounts>, data: BuyFromPumpData) -> Result<()> {
         pumpfun::buy(ctx, data)
+    }
+
+    pub fn burn_and_close(ctx: Context<BurnAndCloseAccounts>) -> Result<()> {
+        misc::burn_and_close_accounts(ctx)
     }
 }

@@ -90,6 +90,7 @@ services:
       DATABASE_URL: postgres://app-adm:app-adm-pass@postgres:5432/app-db?sslmode=disable
       APP_NAME: migrator
       APP_RUN_MODE: test
+      RUST_BACKTRACE: "1"
     networks:
       - moonzip-dev
     depends_on:

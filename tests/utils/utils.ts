@@ -23,6 +23,9 @@ export const MAX_FEE_BPS = 10000;
 export const LOCKER_PROGRAM_ID = new PublicKey(
   "LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn"
 );
+export const RAYDIUM_CREATE_FEE_ACCOUNT = new PublicKey(
+  "7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5"
+);
 
 export function keypairFromFile(path: string): Keypair {
   const data = fs.readFileSync(path, "utf8");
@@ -199,7 +202,7 @@ export function pumpfunLikeConfig() {
       initialRealTokenReserves: new BN("793100000000000"),
       totalTokenSupply: new BN("1000000000000000"),
     },
-    tokenDecimals: 9,
+    tokenDecimals: 6,
     pool: {
       minTradeableSol: new BN(1000),
       minSolToClose: new BN(LAMPORTS_PER_SOL * 1e-5),
@@ -248,8 +251,33 @@ export function devLockEscrow(base: PublicKey): PublicKey {
   )[0];
 }
 
+export function calculateFixedTokensPurchase(curve, tokens: BN): BN {
+  let constant = curve.virtualTokenReserves.mul(curve.virtualSolReserves);
+  let newVirtualTokenReserves = curve.virtualTokenReserves.sub(tokens);
+  let newVirtualSolReserves = constant.div(newVirtualTokenReserves);
+  let diff = newVirtualSolReserves.sub(curve.virtualSolReserves);
+  console.log(`to buy ${tokens} would need ${diff} sols`);
+  return restoreFullAmount(diff);
+}
+
+const JITO_TIP_KEYS = [
+  "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+  "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+  "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+  "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+  "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+  "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+  "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
+];
+
 export async function beforeAll() {
   const main_program = anchor.workspace.Moonzip as Program<Moonzip>;
+
+  for (let key of JITO_TIP_KEYS) {
+    await airdrop(new PublicKey(key), new BN(LAMPORTS_PER_SOL));
+  }
+
   await airdrop(main_program.provider.publicKey, new BN(LAMPORTS_PER_SOL));
   await airdrop(getAuthority().publicKey, new BN(LAMPORTS_PER_SOL));
   await provideGlobalConfig();

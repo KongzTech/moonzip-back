@@ -25,16 +25,17 @@ class MockJitoService {
     encodedTransaction: string,
     _encoding
   ): Promise<string> {
+    // Decode the transaction
+    const transaction = Transaction.from(
+      Buffer.from(encodedTransaction, "base64")
+    );
     try {
-      // Decode the transaction
-      const transaction = Transaction.from(
-        Buffer.from(encodedTransaction, "base64")
-      );
-
       // Send and confirm the transaction
       const signature = await sendTransaction(connection, transaction);
       return signature;
     } catch (error) {
+      let keys = transaction.compileMessage().accountKeys;
+      console.log(`Account keys of instruction(#${keys.length}): ${keys}`);
       console.error("Failed to send transaction:", error);
       throw new Error("Failed to send transaction");
     }

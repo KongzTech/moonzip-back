@@ -61,6 +61,42 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
         return err!(CurvedPoolError::NotClosed);
     }
 
+    // Ok to avoid storing event there - it is needed for check only.
+    ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
+    ctx.accounts.project.ensure_can_graduate()?;
+    emit_cpi!(ctx.accounts.project.set_stage(ProjectStage::Graduated)?);
+
+    anchor_spl::token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token::Transfer {
+                from: ctx.accounts.pool_ata.to_account_info(),
+                to: ctx.accounts.funds_receiver_ata.to_account_info(),
+                authority: ctx.accounts.pool.to_account_info(),
+            },
+            &[&[
+                CURVED_POOL_PREFIX,
+                ctx.accounts.mint.key().as_ref(),
+                &[ctx.accounts.pool.bump],
+            ]],
+        ),
+        ctx.accounts.pool_ata.amount,
+    )?;
+
+    anchor_spl::token::close_account(CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        anchor_spl::token::CloseAccount {
+            account: ctx.accounts.pool_ata.to_account_info(),
+            destination: ctx.accounts.funds_receiver.to_account_info(),
+            authority: ctx.accounts.pool.to_account_info(),
+        },
+        &[&[
+            CURVED_POOL_PREFIX,
+            ctx.accounts.mint.key().as_ref(),
+            &[ctx.accounts.pool.bump],
+        ]],
+    ))?;
+
     let pool = ctx
         .accounts
         .pool
@@ -69,11 +105,6 @@ pub fn graduate(ctx: Context<GraduateCurvedPoolAccounts>) -> Result<()> {
         .funds_receiver
         .add_lamports(ctx.accounts.pool.curve.sol_balance())?;
     pool.close(ctx.accounts.authority.to_account_info())?;
-
-    // Ok to avoid storing event there - it is needed for check only.
-    ctx.accounts.project.stage = ProjectStage::CurvePoolClosed;
-    ctx.accounts.project.ensure_can_graduate()?;
-    emit_cpi!(ctx.accounts.project.set_stage(ProjectStage::Graduated)?);
 
     Ok(())
 }
@@ -492,9 +523,26 @@ pub struct GraduateCurvedPoolAccounts<'info> {
     )]
     pub fee: Account<'info, FeeAccount>,
 
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        init_if_needed,
+        payer = funds_receiver,
+        associated_token::mint = mint,
+        associated_token::authority = funds_receiver,
+    )]
+    pub funds_receiver_ata: Account<'info, TokenAccount>,
+
     /// CHECK: only for lamports receiving
     #[account(mut)]
     pub funds_receiver: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = pool,
+    )]
+    pub pool_ata: Account<'info, TokenAccount>,
 
     #[account(
         mut,

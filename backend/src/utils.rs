@@ -1,3 +1,6 @@
+use bytemuck::bytes_of;
+use solana_sdk::pubkey::{Pubkey, PubkeyError};
+
 /// It is extracted from anchor event codegen.
 /// Check there: https://docs.rs/anchor-lang/latest/anchor_lang/attr.event.html
 pub fn anchor_event_discriminator(event_struct_name: &str) -> [u8; 8] {
@@ -28,3 +31,23 @@ macro_rules! define_discriminator {
 }
 
 pub const ANCHOR_DISCRIMINATOR_BYTE_SIZE: usize = 8;
+
+pub fn find_program_address_with_u64_nonce(
+    seeds: &[&[u8]],
+    program_id: &Pubkey,
+) -> anyhow::Result<(Pubkey, u64)> {
+    let mut bump_seed = u64::MAX;
+    for _ in 0..u8::MAX {
+        {
+            let mut seeds_with_bump = seeds.to_vec();
+            seeds_with_bump.push(bytes_of(&bump_seed));
+            match Pubkey::create_program_address(&seeds_with_bump, program_id) {
+                Ok(address) => return Ok((address, bump_seed)),
+                Err(PubkeyError::InvalidSeeds) => (),
+                _ => break,
+            }
+        }
+        bump_seed -= 1;
+    }
+    anyhow::bail!("unable to find valid program address for seed {seeds:?}")
+}
